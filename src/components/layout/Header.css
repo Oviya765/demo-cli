@@ -1,0 +1,97 @@
+/* ── Header Component Styles ── */
+.header {
+  height: var(--header-height);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-xl);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.header-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--color-text);
+  cursor: pointer;
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+}
+
+.header-hamburger:hover { background: var(--color-surface-hover); }
+
+.header-title h1 {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.3px;
+}
+
+.header-title p {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.header-search {
+  position: relative;
+}
+
+.header-search input {
+  width: 240px;
+  padding: 8px 12px 8px 36px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  color: var(--color-text);
+  transition: all var(--transition-fast);
+  outline: none;
+}
+
+.header-search input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(6,182,212,0.1);
+  width: 300px;
+}
+
+.header-search .search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-muted);
+  width: 16px;
+  height: 16px;
+}
+
+/* Responsive Header rules */
+@media (max-width: 768px) {
+  .header-hamburger {
+    display: flex;
+  }
+
+  .header-search input {
+    width: 160px;
+  }
+
+  .header-search input:focus {
+    width: 200px;
+  }
+}

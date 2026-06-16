@@ -1,0 +1,51 @@
+.inventory-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.summary-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.summary-card.alert-danger {
+  border-left: 4px solid var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+.summary-card.alert-warning {
+  border-left: 4px solid var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.summary-card.alert-success {
+  border-left: 4px solid var(--color-success);
+  background: var(--color-success-bg);
+}
+
+.summary-card-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.summary-card-value {
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.stock-adjust-form {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

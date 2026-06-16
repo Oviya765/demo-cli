@@ -1,0 +1,16 @@
+/* Pharmacy module styles */
+.prescription-card-detail {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.dispense-item-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}

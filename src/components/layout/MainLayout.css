@@ -1,0 +1,47 @@
+/* ── Main Layout Styles ── */
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.main-content {
+  margin-left: var(--sidebar-width);
+  flex: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-content {
+  flex: 1;
+  padding: var(--space-xl);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 45;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Responsive Main Layout rules */
+@media (max-width: 768px) {
+  .sidebar-overlay.show {
+    display: block;
+  }
+
+  .main-content {
+    margin-left: 0;
+  }
+
+  .page-content {
+    padding: var(--space-md);
+  }
+}
