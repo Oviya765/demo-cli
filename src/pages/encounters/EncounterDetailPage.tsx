@@ -9,7 +9,9 @@ import {
 } from '../../services/encounterService';
 import { getPatientById } from '../../services/patientService';
 import { getAllPrescriptions } from '../../services/prescriptionService';
-import type { EncounterResponseDto, PatientResponseDto, PrescriptionResponseDto } from '../../models/types';
+import { getAllOrders, cancelLabOrder } from '../../services/labService';
+import type { EncounterResponseDto, PatientResponseDto, PrescriptionResponseDto, LabOrderResponseDto } from '../../models/types';
+import LabOrdersTable from '../../components/ui/LabOrdersTable';
 import {
   ArrowLeft,
   CheckCircle,
@@ -45,6 +47,7 @@ export default function EncounterDetailPage() {
   const [encounter, setEncounter] = useState<EncounterResponseDto | null>(null);
   const [patient, setPatient] = useState<PatientResponseDto | null>(null);
   const [prescriptions, setPrescriptions] = useState<PrescriptionResponseDto[]>([]);
+  const [realLabOrders, setRealLabOrders] = useState<LabOrderResponseDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   
@@ -72,9 +75,7 @@ export default function EncounterDetailPage() {
   const [newDiagnosis, setNewDiagnosis] = useState('');
   const [diagnosesList, setDiagnosesList] = useState<string[]>([]);
 
-  // Orders State
-  const [newOrder, setNewOrder] = useState('');
-  const [ordersList, setOrdersList] = useState<string[]>([]);
+  // Orders State (handled via realLabOrders)
 
   useEffect(() => {
     loadEncounterDetails();
@@ -116,8 +117,14 @@ export default function EncounterDetailPage() {
       const diags = safeParse(encData.diagnosesJson) as string[] | null;
       setDiagnosesList(diags || []);
 
-      const ords = safeParse(encData.ordersJson) as string[] | null;
-      setOrdersList(ords || []);
+
+      try {
+        const allOrders = await getAllOrders();
+        const encounterOrders = allOrders.filter(o => o.encounterId === Number(id));
+        setRealLabOrders(encounterOrders);
+      } catch (labErr) {
+        console.error('Failed to load real lab orders', labErr);
+      }
 
       try {
         const allRx = await getAllPrescriptions();
@@ -238,29 +245,20 @@ export default function EncounterDetailPage() {
     }
   };
 
-  const handleAddOrder = async () => {
-    if (!encounter || !newOrder.trim()) return;
+
+
+  const handleCancelLabOrder = async (orderId: number) => {
+    if (!confirm('Are you sure you want to cancel this lab order?')) return;
     setActionLoading(true);
     try {
-      const updatedList = [...ordersList, newOrder.trim()];
-      const updated = await updateEncounter(encounter.encounterId, {
-        patientId: encounter.patientId,
-        visitType: encounter.visitType,
-        chiefComplaint: encounter.chiefComplaint,
-        vitalsJson: encounter.vitalsJson,
-        notesJson: encounter.notesJson,
-        diagnosesJson: encounter.diagnosesJson,
-        ordersJson: JSON.stringify(updatedList),
-        status: encounter.status
-      });
-
-      setEncounter(updated);
-      setOrdersList(updatedList);
-      setNewOrder('');
-      toast.success('Lab order added.');
-    } catch (err) {
-      console.error(err);
-      toast.error('Failed to add order.');
+      await cancelLabOrder(orderId);
+      toast.success('Lab order cancelled successfully.');
+      const allOrders = await getAllOrders();
+      const encounterOrders = allOrders.filter(o => o.encounterId === Number(id));
+      setRealLabOrders(encounterOrders);
+    } catch (err: any) {
+      console.error('Failed to cancel lab order', err);
+      toast.error(err.message || 'Failed to cancel lab order.');
     } finally {
       setActionLoading(false);
     }
@@ -377,7 +375,7 @@ export default function EncounterDetailPage() {
               <button className="btn btn-secondary" onClick={() => navigate('/prescriptions/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}>
                 <Pill size={16} /> Add Prescription
               </button>
-              <button className="btn btn-secondary" onClick={() => setActiveTab('Orders')} title="Order Lab investigations">
+              <button className="btn btn-secondary" onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })} title="Order Lab investigations">
                 <ClipboardList size={16} /> Order Lab
               </button>
               <button className="btn btn-secondary" onClick={() => toast.success('Encounter progress saved as draft.')}>
@@ -829,64 +827,39 @@ export default function EncounterDetailPage() {
             <div className="section-card">
               <div className="section-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 style={{ margin: 0 }}>Lab Orders</h3>
-                {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && ordersList.length > 0 && (
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <input
-                      type="text"
-                      className="form-input form-input-sm"
-                      placeholder="Fast lab order..."
-                      value={newOrder}
-                      onChange={e => setNewOrder(e.target.value)}
-                      style={{ width: '220px' }}
-                    />
-                    <button className="btn btn-primary btn-sm" onClick={handleAddOrder} disabled={actionLoading}>
-                      <Plus size={14} /> Create Lab Order
-                    </button>
-                  </div>
+                {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && realLabOrders.length > 0 && (
+                  <button 
+                    className="btn btn-primary btn-sm" 
+                    onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
+                  >
+                    <Plus size={14} /> Create Lab Order
+                  </button>
                 )}
               </div>
               <div className="section-card-body">
-                {ordersList.length === 0 ? (
+                {realLabOrders.length === 0 ? (
                   <div className="dashed-empty-box">
                     <div className="dashed-empty-icon" style={{ background: '#f5f3ff', color: '#8b5cf6' }}>🧪</div>
                     <h4>No lab orders yet</h4>
                     <p style={{ color: 'var(--color-text-secondary)' }}>Order investigations for this encounter</p>
                     
                     {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-                        <input
-                          type="text"
-                          className="form-input"
-                          placeholder="e.g. CBC, Lipid Profile, Chest X-ray"
-                          value={newOrder}
-                          onChange={e => setNewOrder(e.target.value)}
-                        />
-                        <button className="btn btn-primary" onClick={handleAddOrder} disabled={actionLoading}>
-                          <Plus size={16} /> Create Lab Order
-                        </button>
-                      </div>
+                      <button 
+                        className="btn btn-primary" 
+                        style={{ marginTop: '16px' }}
+                        onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
+                      >
+                        <Plus size={16} /> Create Lab Order
+                      </button>
                     )}
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                    {ordersList.map((order, index) => (
-                      <span
-                        key={index}
-                        className="badge"
-                        style={{
-                          background: '#f5f3ff',
-                          color: '#8b5cf6',
-                          border: '1px solid #ddd6fe',
-                          padding: '8px 14px',
-                          fontSize: '0.8125rem',
-                          fontWeight: '600',
-                          borderRadius: 'var(--radius-full)'
-                        }}
-                      >
-                        {order}
-                      </span>
-                    ))}
-                  </div>
+                  <LabOrdersTable
+                    orders={realLabOrders}
+                    context="encounter"
+                    onCancelOrder={handleCancelLabOrder}
+                    actionLoading={actionLoading}
+                  />
                 )}
               </div>
             </div>
@@ -1052,7 +1025,7 @@ export default function EncounterDetailPage() {
                 type="button"
                 className="btn btn-secondary"
                 style={{ justifyContent: 'flex-start', color: '#8b5cf6', borderColor: '#ddd6fe' }}
-                onClick={() => setActiveTab('Orders')}
+                onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
               >
                 <ClipboardList size={16} /> Order Lab
               </button>

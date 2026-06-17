@@ -44,6 +44,29 @@ export default function LabOrderDetailPage() {
     setLoading(true);
     try {
       const data = await getOrderById(Number(id));
+      
+      // Access Control: reported details can only be viewed by Clinicians.
+      // Technicians can access during COLLECTED phase to publish results.
+      const isReported = data.status === 'RESULTS_REPORTED' || data.status === 'CRITICAL_REPORTED';
+      const isTechnician = user?.role === 'LAB_TECHNICIAN';
+      const isClinician = user?.role === 'CLINICIAN';
+      
+      if (isReported) {
+        if (!isClinician) {
+          toast.error('Access restricted. Only clinicians can view reported lab results.');
+          navigate('/lab');
+          return;
+        }
+      } else {
+        if (data.status === 'COLLECTED' && isTechnician) {
+          // OK: Technician is updating results
+        } else {
+          toast.error('Details are only available once results are reported.');
+          navigate('/lab');
+          return;
+        }
+      }
+
       setOrder(data);
       
       // Auto-set the first test code from ordered list in form

@@ -62,6 +62,7 @@ export default function EncounterFormPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [requestLabOrder, setRequestLabOrder] = useState(false);
 
   const [patientMrn, setPatientMrn] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<PatientResponseDto | null>(null);
@@ -117,7 +118,16 @@ export default function EncounterFormPage() {
         diagnosesJson: '[]',
         ordersJson: '[]',
       });
-      navigate(`/encounters/${newEnc.encounterId}`);
+      if (requestLabOrder) {
+        navigate('/lab/new', {
+          state: {
+            encounterId: newEnc.encounterId,
+            patientId: selectedPatient.patientId
+          }
+        });
+      } else {
+        navigate(`/encounters/${newEnc.encounterId}`);
+      }
     } catch (err) {
       console.error('Failed to create encounter', err);
     } finally {
@@ -307,6 +317,20 @@ export default function EncounterFormPage() {
                         + {tag}
                       </button>
                     ))}
+                  </div>
+                  <div style={{ marginTop: '20px', borderTop: '1px solid var(--color-border)', paddingTop: '16px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={requestLabOrder}
+                        onChange={e => setRequestLabOrder(e.target.checked)}
+                        style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--color-primary)' }}
+                      />
+                      <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>Request Laboratory Order</span>
+                    </label>
+                    <p style={{ margin: '4px 0 0 24px', fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+                      Check this to automatically open the Lab Order form after creating the encounter.
+                    </p>
                   </div>
                 </div>
               </div>
