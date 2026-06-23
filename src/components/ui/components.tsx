@@ -1,7 +1,7 @@
 import React from "react";
-
+ 
 export const today = new Date().toISOString().slice(0, 16);
-
+ 
 export function Panel({ title, children, actions }: { title: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <div className="card">
@@ -13,7 +13,7 @@ export function Panel({ title, children, actions }: { title: string; children: R
     </div>
   );
 }
-
+ 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   const { label, ...inputProps } = props;
   return (
@@ -23,7 +23,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { lab
     </div>
   );
 }
-
+ 
 export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement> & { label: string; options: { value: string | number; label: string }[] }) {
   const { label, options, ...selectProps } = props;
   return (
@@ -39,8 +39,8 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement> & { 
     </div>
   );
 }
-
-export function Table({ columns, rows }: { columns: string[]; rows: React.ReactNode[][] }) {
+ 
+export function Table({ columns, rows, onRowClick }: { columns: string[]; rows: React.ReactNode[][]; onRowClick?: (index: number) => void }) {
   return (
     <div className="data-table-wrapper">
       <table className="data-table">
@@ -60,7 +60,11 @@ export function Table({ columns, rows }: { columns: string[]; rows: React.ReactN
             </tr>
           ) : (
             rows.map((row, index) => (
-              <tr key={index}>
+              <tr
+                key={index}
+                onClick={onRowClick ? () => onRowClick(index) : undefined}
+                style={onRowClick ? { cursor: "pointer" } : undefined}
+              >
                 {row.map((cell, cellIndex) => (
                   <td key={cellIndex}>{cell}</td>
                 ))}
@@ -72,11 +76,11 @@ export function Table({ columns, rows }: { columns: string[]; rows: React.ReactN
     </div>
   );
 }
-
+ 
 export function StatusBadge({ status }: { status: string }) {
   const normalized = (status || "").toUpperCase();
   let className = "badge-neutral";
-  
+ 
   if (normalized === "PAID" || normalized === "SUCCESS" || normalized === "COMPLETED") {
     className = "badge-success";
   } else if (normalized === "UNPAID" || normalized === "PENDING" || normalized === "PARTIALLY_PAID") {
@@ -84,7 +88,7 @@ export function StatusBadge({ status }: { status: string }) {
   } else if (normalized === "VOID" || normalized === "CANCELLED" || normalized === "FAILED" || normalized === "OVERDUE") {
     className = "badge-danger";
   }
-
+ 
   return (
     <span className={`badge ${className}`}>
       <span className="badge-dot"></span>
@@ -92,10 +96,10 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-
+ 
 export function Modal({ isOpen, onClose, title, children }: { isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
   if (!isOpen) return null;
-
+ 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "700px" }}>
@@ -110,11 +114,11 @@ export function Modal({ isOpen, onClose, title, children }: { isOpen: boolean; o
     </div>
   );
 }
-
+ 
 export function money(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(value || 0);
 }
-
+ 
 export function date(value?: any) {
   if (!value) return "-";
   if (Array.isArray(value)) {
@@ -137,7 +141,7 @@ export function date(value?: any) {
     return "-";
   }
 }
-
+ 
 export interface PaginationProps {
   currentPage: number;
   totalPages: number;
@@ -147,7 +151,7 @@ export interface PaginationProps {
   onItemsPerPageChange: (items: number) => void;
   itemsPerPageOptions?: number[];
 }
-
+ 
 export function Pagination({
   currentPage,
   totalPages,
@@ -158,80 +162,113 @@ export function Pagination({
   itemsPerPageOptions = [5, 10, 20, 50]
 }: PaginationProps) {
   if (totalItems === 0) return null;
-
+ 
   const startIdx = totalItems > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0;
   const endIdx = Math.min(currentPage * itemsPerPage, totalItems);
-
+ 
+  // Show max 5 page buttons with ellipsis
+  const getPageNumbers = (): (number | '...')[] => {
+    if (totalPages <= 5) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const pages: (number | '...')[] = [];
+    if (currentPage <= 3) {
+      pages.push(1, 2, 3, 4, '...', totalPages);
+    } else if (currentPage >= totalPages - 2) {
+      pages.push(1, '...', totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+    } else {
+      pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+    }
+    return pages;
+  };
+ 
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "20px", padding: "16px", background: "var(--color-bg-subtle)", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-        <span style={{ fontSize: "14px", color: "var(--color-text-muted)" }}>
-          Items per page:
-        </span>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "16px", padding: "12px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span style={{ fontSize: "0.8125rem", color: "var(--color-text-muted)" }}>Rows:</span>
         <select
           value={itemsPerPage}
           onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
           style={{
-            padding: "6px 8px",
-            borderRadius: "4px",
+            padding: "4px 8px",
+            borderRadius: "6px",
             border: "1px solid var(--color-border)",
             background: "var(--color-bg)",
             cursor: "pointer",
-            fontSize: "14px"
+            fontSize: "0.8125rem",
+            color: "var(--color-text)",
+            outline: "none"
           }}
         >
           {itemsPerPageOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
+            <option key={option} value={option}>{option}</option>
           ))}
         </select>
       </div>
-
-      <div style={{ fontSize: "14px", color: "var(--color-text)" }}>
-        Showing {startIdx} to {endIdx} of {totalItems} items
-      </div>
-
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+ 
+      <span style={{ fontSize: "0.8125rem", color: "var(--color-text-muted)" }}>
+        {startIdx}–{endIdx} of {totalItems}
+      </span>
+ 
+      <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
         <button
           onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           disabled={currentPage === 1}
-          className="btn btn-secondary"
-          style={{ padding: "6px 12px", fontSize: "14px" }}
+          style={{
+            padding: "6px 10px",
+            borderRadius: "6px",
+            border: "1px solid var(--color-border)",
+            background: "var(--color-bg)",
+            color: currentPage === 1 ? "var(--color-text-muted)" : "var(--color-text)",
+            cursor: currentPage === 1 ? "not-allowed" : "pointer",
+            fontSize: "0.8125rem",
+            opacity: currentPage === 1 ? 0.5 : 1
+          }}
         >
-          ← Previous
+          ‹
         </button>
-
-        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+ 
+        {getPageNumbers().map((page, idx) =>
+          page === '...' ? (
+            <span key={`ellipsis-${idx}`} style={{ padding: "0 4px", fontSize: "0.8125rem", color: "var(--color-text-muted)" }}>…</span>
+          ) : (
             <button
               key={page}
-              onClick={() => onPageChange(page)}
+              onClick={() => onPageChange(page as number)}
               style={{
-                padding: "6px 10px",
-                borderRadius: "4px",
-                border: page === currentPage ? "none" : "1px solid var(--color-border)",
-                background: page === currentPage ? "var(--color-primary)" : "var(--color-bg)",
-                color: page === currentPage ? "white" : "var(--color-text)",
+                width: "32px",
+                height: "32px",
+                borderRadius: "6px",
+                border: page === currentPage ? "none" : "1px solid transparent",
+                background: page === currentPage ? "var(--color-primary)" : "transparent",
+                color: page === currentPage ? "#fff" : "var(--color-text)",
                 cursor: "pointer",
-                fontSize: "14px",
-                fontWeight: page === currentPage ? "600" : "400"
+                fontSize: "0.8125rem",
+                fontWeight: page === currentPage ? 600 : 400,
+                transition: "all 0.15s ease"
               }}
             >
               {page}
             </button>
-          ))}
-        </div>
-
+          )
+        )}
+ 
         <button
           onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
           disabled={currentPage === totalPages}
-          className="btn btn-secondary"
-          style={{ padding: "6px 12px", fontSize: "14px" }}
+          style={{
+            padding: "6px 10px",
+            borderRadius: "6px",
+            border: "1px solid var(--color-border)",
+            background: "var(--color-bg)",
+            color: currentPage === totalPages ? "var(--color-text-muted)" : "var(--color-text)",
+            cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+            fontSize: "0.8125rem",
+            opacity: currentPage === totalPages ? 0.5 : 1
+          }}
         >
-          Next →
+          ›
         </button>
       </div>
     </div>
   );
 }
+ 

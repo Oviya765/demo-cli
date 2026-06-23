@@ -1,13 +1,12 @@
-import type { FormEvent, ReactNode } from 'react';
-import { Activity, Calendar, CalendarDays, Clock, Plus, Search, Users, X } from 'lucide-react';
+import { type FormEvent, type ReactNode, useState } from 'react';
+import { Activity, Calendar, CalendarDays, CheckCircle2, Clock, FileText, Plus, Search, UserX, Users, X } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { AppointmentResponseDto, PatientResponseDto } from '../../models/types';
 import '../../assets/styles/patients/patients.css';
 
 interface ReceptionDashboardLayoutProps {
   patientsList: PatientResponseDto[];
   appointments: AppointmentResponseDto[];
-  patientSearch: string;
-  setPatientSearch: (value: string) => void;
   appointmentSearch: string;
   setAppointmentSearch: (value: string) => void;
   showAddPatientModal: boolean;
@@ -38,20 +37,16 @@ interface ReceptionDashboardLayoutProps {
   setInsuranceId: (value: string) => void;
   actionLoading: boolean;
   navigateToNewAppointment: () => void;
+  navigateToInvoices: () => void;
+  navigateToPatients: () => void;
   handleReceptionistRegisterSubmit: (e: FormEvent) => Promise<void>;
-  handleCheckIn: (id: number) => Promise<void>;
-  handleCancelAppt: (id: number) => Promise<void>;
   getStatusBadge: (status: string) => ReactNode;
-  formatDate: (dateStr: string) => string;
   formatTime: (dateStr: string) => string;
-  parseContact: (contactJson: string) => { email: string; phone: string };
 }
 
 export default function ReceptionDashboardLayout({
   patientsList,
   appointments,
-  patientSearch,
-  setPatientSearch,
   appointmentSearch,
   setAppointmentSearch,
   showAddPatientModal,
@@ -82,29 +77,41 @@ export default function ReceptionDashboardLayout({
   setInsuranceId,
   actionLoading,
   navigateToNewAppointment,
+  navigateToInvoices,
+  navigateToPatients,
   handleReceptionistRegisterSubmit,
-  handleCheckIn,
-  handleCancelAppt,
   getStatusBadge,
-  formatDate,
   formatTime,
-  parseContact,
 }: ReceptionDashboardLayoutProps) {
+  const [todayApptPage, setTodayApptPage] = useState(1);
+  const ITEMS_PER_PAGE = 5;
+  const NO_SHOW_GRACE_MINUTES = 30;
+  
   const todayStr = new Date().toISOString().split('T')[0];
+  const isNoShowDataPoint = (appt: AppointmentResponseDto) => {
+    if (appt.status === 'NO_SHOW') return true;
+    if (appt.status !== 'CANCELLED') return false;
+
+    const startTime = new Date(appt.startAt).getTime();
+    if (Number.isNaN(startTime)) return false;
+
+    const cutoff = Date.now() - NO_SHOW_GRACE_MINUTES * 60 * 1000;
+    return startTime <= cutoff;
+  };
+
   const todayAppointmentsCount = appointments.filter(a => a.startAt.startsWith(todayStr)).length;
   const checkedInCount = appointments.filter(a => a.startAt.startsWith(todayStr) && a.status === 'CHECKED_IN').length;
+  const todayCompletedCount = appointments.filter(a => a.startAt.startsWith(todayStr) && a.status === 'COMPLETED').length;
+  const todayNoShowCount = appointments.filter(a => a.startAt.startsWith(todayStr) && isNoShowDataPoint(a)).length;
 
   const stats = [
     { label: 'Total Registered Patients', value: patientsList.length.toString(), icon: <Users size={22} />, color: 'primary' },
     { label: 'Today\'s Appointments', value: todayAppointmentsCount.toString(), icon: <CalendarDays size={22} />, color: 'info' },
     { label: 'Patients Checked In', value: checkedInCount.toString(), icon: <Activity size={22} />, color: 'success' },
     { label: 'Scheduled Waitlist', value: appointments.filter(a => a.status === 'SCHEDULED').length.toString(), icon: <Clock size={22} />, color: 'warning' },
+    { label: 'Completed Appointments', value: todayCompletedCount.toString(), icon: <CheckCircle2 size={22} />, color: 'success' },
+    { label: 'No-Show Patients', value: todayNoShowCount.toString(), icon: <UserX size={22} />, color: 'warning' },
   ];
-
-  const filteredPatients = patientsList.filter(p =>
-    p.name.toLowerCase().includes(patientSearch.toLowerCase()) ||
-    p.mrn.toLowerCase().includes(patientSearch.toLowerCase())
-  );
 
   const todayAppts = appointments.filter(appt => {
     const matchSearch =
@@ -114,9 +121,28 @@ export default function ReceptionDashboardLayout({
     return matchSearch && isToday;
   });
 
+  // Appointment Analysis - Last 7 days
+  const last7DaysDate = new Date();
+  last7DaysDate.setDate(last7DaysDate.getDate() - 7);
+  const last7DaysStr = last7DaysDate.toISOString().split('T')[0];
+  const last7DaysAppts = appointments.filter(a => a.startAt >= last7DaysStr);
+  const completedAppts = last7DaysAppts.filter(a => a.status === 'COMPLETED').length;
+  const cancelledAppts = last7DaysAppts.filter(a => a.status === 'CANCELLED').length;
+  const noShowAppts = last7DaysAppts.filter(a => isNoShowDataPoint(a)).length;
+  const avgApptPerDay = Math.round(last7DaysAppts.length / 7);
+
+  // Chart data for appointment analysis
+  const analysisChartData = [
+    { name: 'Total', value: last7DaysAppts.length },
+    { name: 'Completed', value: completedAppts },
+    { name: 'Cancelled', value: cancelledAppts },
+    { name: 'No Show', value: noShowAppts },
+    { name: 'Avg/Day', value: avgApptPerDay },
+  ];
+
   return (
-    <div>
-      <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+    <div className="reception-dashboard-shell">
+      <div className="reception-topbar" style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.5px' }}>
             Reception Desk 🏢
@@ -125,8 +151,8 @@ export default function ReceptionDashboardLayout({
             Register clinic patients and manage doctor appointments.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <button className="btn btn-secondary" onClick={() => setShowAddPatientModal(true)}>
+        <div className="reception-top-actions" style={{ display: 'flex', gap: '12px' }}>
+          <button className="btn btn-primary" onClick={() => setShowAddPatientModal(true)}>
             <Plus size={18} /> Register Patient
           </button>
           <button className="btn btn-primary" onClick={navigateToNewAppointment}>
@@ -135,7 +161,7 @@ export default function ReceptionDashboardLayout({
         </div>
       </div>
 
-      <div className="stats-grid" style={{ marginBottom: '32px' }}>
+      <div className="stats-grid reception-stats-grid" style={{ marginBottom: '32px' }}>
         {stats.map((stat) => (
           <div className="stat-card" key={stat.label}>
             <div className={`stat-card-icon ${stat.color}`}>{stat.icon}</div>
@@ -147,71 +173,55 @@ export default function ReceptionDashboardLayout({
         ))}
       </div>
 
-      <div className="dashboard-grid">
-        <div className="card">
-          <div className="card-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Users size={18} style={{ color: 'var(--color-primary)' }} />
-              Patient Registry
-            </h3>
-            <div className="header-search search-input" style={{ width: '220px', margin: 0 }}>
-              <Search size={16} className="search-icon" />
-              <input
-                type="text"
-                placeholder="Search name or MRN..."
-                value={patientSearch}
-                onChange={e => setPatientSearch(e.target.value)}
-              />
+      <div className="reception-quick-section" style={{ marginBottom: '32px' }}>
+        <h3 className="reception-section-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', fontWeight: 600, marginBottom: '16px' }}>
+          <Activity size={18} style={{ color: 'var(--color-primary)' }} />
+          Quick Actions
+        </h3>
+        <div className="reception-quick-actions">
+          <button className="reception-quick-action-card qa-book" onClick={navigateToNewAppointment}>
+            <div className="qa-icon" style={{ background: 'var(--color-info-bg)', color: 'var(--color-info)' }}>
+              <CalendarDays size={22} />
             </div>
-          </div>
+            <h4>Book Appointment</h4>
+            <p>Schedule a patient visit quickly</p>
+          </button>
 
-          <div className="card-body" style={{ padding: '16px 0 0' }}>
-            {filteredPatients.length === 0 ? (
-              <div className="empty-state" style={{ padding: '32px 0' }}>
-                <p style={{ color: 'var(--color-text-secondary)' }}>No registered patients found.</p>
-              </div>
-            ) : (
-              <div className="data-table-wrapper" style={{ border: 'none', boxShadow: 'none' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>MRN</th>
-                      <th>Name</th>
-                      <th>DOB</th>
-                      <th>Gender</th>
-                      <th>Contact</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPatients.map(p => {
-                      const contact = parseContact(p.contactInfoJson);
-                      return (
-                        <tr key={p.patientId}>
-                          <td><span className="badge badge-neutral" style={{ padding: '4px 6px', fontWeight: 600 }}>{p.mrn}</span></td>
-                          <td className="cell-main">{p.name}</td>
-                          <td>{formatDate(p.dob)}</td>
-                          <td style={{ textTransform: 'capitalize' }}>{p.gender.toLowerCase()}</td>
-                          <td>
-                            <div style={{ fontSize: '0.8rem' }}>{contact.phone}</div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--color-text-secondary)' }}>{contact.email}</div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <button className="reception-quick-action-card qa-register" onClick={() => setShowAddPatientModal(true)}>
+            <div className="qa-icon" style={{ background: 'var(--color-primary-100)', color: 'var(--color-primary-dark)' }}>
+              <Users size={22} />
+            </div>
+            <h4>Register Patient</h4>
+            <p>Add new patient to clinic registry</p>
+          </button>
+
+          <button className="reception-quick-action-card qa-invoice" onClick={navigateToInvoices}>
+            <div className="qa-icon" style={{ background: 'var(--color-warning-bg)', color: 'var(--color-warning)' }}>
+              <FileText size={22} />
+            </div>
+            <h4>Fetch Invoice</h4>
+            <p>Open billing and invoice records</p>
+          </button>
+
+          <button className="reception-quick-action-card qa-search" onClick={navigateToPatients}>
+            <div className="qa-icon" style={{ background: 'var(--color-success-bg)', color: 'var(--color-success)' }}>
+              <Search size={22} />
+            </div>
+            <h4>Search Patient</h4>
+            <p>Find patient profile by MRN</p>
+          </button>
         </div>
+      </div>
 
-        <div className="card">
-          <div className="card-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="reception-live-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)', marginBottom: 'var(--space-lg)' }}>
+        {/* Left side - Today's Appointments */}
+        <div className="card reception-card reception-today-desk">
+          <div className="card-header reception-card-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Clock size={18} style={{ color: 'var(--color-warning)' }} />
               Today's Appointments Desk
             </h3>
-            <div className="header-search search-input" style={{ width: '200px', margin: 0 }}>
+            <div className="header-search search-input reception-search" style={{ width: '200px', margin: 0 }}>
               <Search size={16} className="search-icon" />
               <input
                 type="text"
@@ -228,67 +238,90 @@ export default function ReceptionDashboardLayout({
                 <p style={{ color: 'var(--color-text-secondary)' }}>No appointments scheduled for today.</p>
               </div>
             ) : (
-              <div className="data-table-wrapper" style={{ border: 'none', boxShadow: 'none' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Patient</th>
-                      <th>Doctor</th>
-                      <th>Time</th>
-                      <th>Status</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {todayAppts.map(appt => (
-                      <tr key={appt.apptId}>
-                        <td>
-                          <div className="cell-main">{appt.patientName}</div>
-                          <div className="cell-sub" style={{ fontSize: '0.7rem' }}>MRN: {appt.patientMrn}</div>
-                        </td>
-                        <td>{appt.clinicianName}</td>
-                        <td>{formatTime(appt.startAt)}</td>
-                        <td>{getStatusBadge(appt.status)}</td>
-                        <td>
-                          <div style={{ display: 'flex', gap: '6px' }}>
-                            {appt.status === 'SCHEDULED' && (
-                              <button
-                                className="btn btn-primary"
-                                style={{ padding: '4px 6px', fontSize: '0.7rem', height: 'auto' }}
-                                onClick={() => handleCheckIn(appt.apptId)}
-                              >
-                                Check In
-                              </button>
-                            )}
-                            {(appt.status === 'SCHEDULED' || appt.status === 'CHECKED_IN') && (
-                              <button
-                                className="btn btn-danger"
-                                style={{ padding: '4px 6px', fontSize: '0.7rem', height: 'auto', background: 'transparent', borderColor: 'var(--color-danger)', color: 'var(--color-danger)' }}
-                                onClick={() => handleCancelAppt(appt.apptId)}
-                              >
-                                Cancel
-                              </button>
-                            )}
-                            {!(appt.status === 'SCHEDULED' || appt.status === 'CHECKED_IN') && (
-                              <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.75rem' }}>—</span>
-                            )}
-                          </div>
-                        </td>
+              <>
+                <div className="data-table-wrapper" style={{ border: 'none', boxShadow: 'none' }}>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Patient</th>
+                        <th>Doctor</th>
+                        <th>Time</th>
+                        <th>Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {todayAppts.slice((todayApptPage - 1) * ITEMS_PER_PAGE, todayApptPage * ITEMS_PER_PAGE).map(appt => (
+                        <tr key={appt.apptId}>
+                          <td>
+                            <div className="cell-main">{appt.patientName}</div>
+                            <div className="cell-sub">MRN: {appt.patientMrn}</div>
+                          </td>
+                          <td>{appt.clinicianName}</td>
+                          <td>{formatTime(appt.startAt)}</td>
+                          <td>{getStatusBadge(appt.status)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {todayAppts.length > ITEMS_PER_PAGE && (
+                  <div className="pagination-bar" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--color-border)' }}>
+                    <button 
+                      className="pagination-btn" 
+                      onClick={() => setTodayApptPage(p => Math.max(1, p - 1))}
+                      disabled={todayApptPage === 1}
+                    >
+                      ← Previous
+                    </button>
+                    <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+                      Page {todayApptPage} of {Math.ceil(todayAppts.length / ITEMS_PER_PAGE)}
+                    </span>
+                    <button 
+                      className="pagination-btn" 
+                      onClick={() => setTodayApptPage(p => Math.min(Math.ceil(todayAppts.length / ITEMS_PER_PAGE), p + 1))}
+                      disabled={todayApptPage === Math.ceil(todayAppts.length / ITEMS_PER_PAGE)}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                )}
+              </>
             )}
+          </div>
+        </div>
+
+        {/* Right side - Appointment Analysis */}
+        <div className="card reception-card reception-analysis-desk" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div className="card-header reception-card-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '16px' }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+              <Activity size={18} style={{ color: 'var(--color-primary)' }} />
+              Analysis (Last 7 Days)
+            </h3>
+          </div>
+          <div className="card-body analysis-desk-body" style={{ padding: '12px 0', flex: 1 }}>
+            <div className="analysis-chart-wrap">
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={analysisChartData} margin={{ top: 5, right: 15, left: -25, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+                <XAxis dataKey="name" stroke="var(--color-text-secondary)" tick={{ fontSize: 11 }} />
+                <YAxis stroke="var(--color-text-secondary)" tick={{ fontSize: 11 }} />
+                <Tooltip 
+                  contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}
+                  cursor={{ fill: 'rgba(59, 130, 246, 0.1)' }}
+                />
+                <Bar dataKey="value" fill="var(--color-primary)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            </div>
           </div>
         </div>
       </div>
 
       {showAddPatientModal && (
-        <div className="patients-modal-overlay" style={{ background: 'rgba(5, 8, 16, 0.85)', backdropFilter: 'blur(8px)' }}>
-          <div className="patients-modal" style={{ maxWidth: '650px', background: '#0d1527', border: '1px solid rgba(255,255,255,0.08)', color: '#ffffff' }}>
-            <div className="modal-header" style={{ padding: '24px 24px 8px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="patients-modal-overlay" style={{ background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(6px)' }}>
+          <div className="patients-modal" style={{ maxWidth: '650px', background: '#ffffff', border: '1px solid #e2e8f0', color: '#0f172a', boxShadow: '0 24px 80px rgba(15, 23, 42, 0.18)' }}>
+            <div className="modal-header" style={{ padding: '24px 24px 8px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Users size={20} style={{ color: 'var(--color-primary)' }} />
                 Register New Clinic Patient
               </h2>
@@ -298,48 +331,49 @@ export default function ReceptionDashboardLayout({
             <form onSubmit={handleReceptionistRegisterSubmit}>
               <div className="patients-modal-body" style={{ padding: '24px', maxHeight: '70vh', overflowY: 'auto' }}>
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Patient Full Name *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Patient Full Name *</label>
                   <input
                     type="text"
                     placeholder="Enter patient full name"
                     value={regName}
                     onChange={e => setRegName(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Patient Email *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Patient Email *</label>
                   <input
                     type="email"
                     placeholder="patient@email.com"
                     value={regEmail}
                     onChange={e => setRegEmail(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Date of Birth *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Date of Birth *</label>
                     <input
                       type="date"
                       value={dob}
                       onChange={e => setDob(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      max={todayStr}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
 
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Gender *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Gender *</label>
                     <select
                       value={gender}
                       onChange={e => setGender(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: '#0d1527', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     >
                       <option value="MALE">Male</option>
                       <option value="FEMALE">Female</option>
@@ -349,109 +383,109 @@ export default function ReceptionDashboardLayout({
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Phone Number *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Phone Number *</label>
                   <input
                     type="tel"
                     placeholder="+91 98765 43210"
                     value={phone}
                     onChange={e => setPhone(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
-                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px', margin: '24px 0 16px' }}>Address Details</h3>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '24px 0 16px' }}>Address Details</h3>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Street Address *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Street Address *</label>
                   <input
                     type="text"
                     placeholder="123 Health Ave"
                     value={street}
                     onChange={e => setStreet(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>City *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>City *</label>
                     <input
                       type="text"
                       placeholder="Chennai"
                       value={city}
                       onChange={e => setCity(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>State *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>State *</label>
                     <input
                       type="text"
                       placeholder="TN"
                       value={stateCode}
                       onChange={e => setStateCode(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Zip *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Zip *</label>
                     <input
                       type="text"
                       placeholder="600001"
                       value={zip}
                       onChange={e => setZip(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                 </div>
 
-                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px', margin: '24px 0 16px' }}>Emergency Contact</h3>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '24px 0 16px' }}>Emergency Contact</h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Contact Name *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Contact Name *</label>
                     <input
                       type="text"
                       placeholder="Jane Doe (Spouse)"
                       value={emergencyName}
                       onChange={e => setEmergencyName(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Contact Phone *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Contact Phone *</label>
                     <input
                       type="tel"
                       placeholder="+91 98765 00000"
                       value={emergencyPhone}
                       onChange={e => setEmergencyPhone(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                 </div>
 
-                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px', margin: '24px 0 16px' }}>Insurance Details (Optional)</h3>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '24px 0 16px' }}>Insurance Details (Optional)</h3>
 
                 <div className="form-group" style={{ marginBottom: '8px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Insurance Policy ID</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Insurance Policy ID</label>
                   <input
                     type="text"
                     placeholder="INS-104928"
                     value={insuranceId}
                     onChange={e => setInsuranceId(e.target.value)}
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
               </div>
 
-              <div className="patients-modal-footer" style={{ padding: '16px 24px 24px', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', gap: '12px' }}>
+              <div className="patients-modal-footer" style={{ padding: '16px 24px 24px', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '12px' }}>
                 <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowAddPatientModal(false)}>Cancel</button>
                 <button
                   type="submit"

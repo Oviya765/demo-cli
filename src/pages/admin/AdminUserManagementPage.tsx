@@ -32,10 +32,24 @@ const AVAILABLE_ROLES = [
   'ADMIN',
   'PHARMACIST',
   'RECEPTION',
-  'CLINIC_MANAGER',
   'FINANCE_OFFICER',
-  'COMPLIANCE_OFFICER'
 ];
+
+const SUPPORTED_ROLES = new Set([
+  'ADMIN',
+  'PATIENT',
+  'RECEPTION',
+  'CLINICIAN',
+  'PHARMACIST',
+  'LAB_TECHNICIAN',
+  'FINANCE_OFFICER',
+]);
+
+const normalizeRoleForApi = (roleName: string): string => {
+  const normalized = (roleName || '').toUpperCase().trim();
+  if (normalized === 'COMPLIANCE_OFFICER') return 'ADMIN';
+  return SUPPORTED_ROLES.has(normalized) ? normalized : 'CLINICIAN';
+};
 
 export default function AdminUserManagementPage() {
   const { user: currentUser } = useAuth();
@@ -109,7 +123,18 @@ export default function AdminUserManagementPage() {
       return;
     }
 
-    if (modalMode === 'EDIT' && password.trim()) {
+    if (modalMode === 'CREATE' && !password) {
+      toast.error('Password is required for new users.');
+      return;
+    }
+
+    if (modalMode === 'CREATE') {
+      const passwordCheck = validatePassword(password);
+      if (!passwordCheck.isValid) {
+        toast.error(passwordCheck.error || 'Password is not strong enough.');
+        return;
+      }
+    } else if (modalMode === 'EDIT' && password.trim()) {
       const passwordCheck = validatePassword(password);
       if (!passwordCheck.isValid) {
         toast.error(passwordCheck.error || 'Password is not strong enough.');
@@ -124,7 +149,8 @@ export default function AdminUserManagementPage() {
           name: name.trim(),
           email: email.trim(),
           phone: phone.trim(),
-          role,
+          password,
+          role: normalizeRoleForApi(role),
           status
         };
         await createUser(payload);
@@ -134,7 +160,7 @@ export default function AdminUserManagementPage() {
           name: name.trim(),
           email: email.trim(),
           phone: phone.trim(),
-          role,
+          role: normalizeRoleForApi(role),
           status,
           ...(password.trim() ? { password } : {})
         };
@@ -175,7 +201,7 @@ export default function AdminUserManagementPage() {
         name: u.name,
         email: u.email,
         phone: u.phone,
-        role: u.role,
+        role: normalizeRoleForApi(u.role),
         status: 'ACTIVE'
       };
       await updateUser(u.userId, payload);
@@ -371,35 +397,40 @@ export default function AdminUserManagementPage() {
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <div className="actions-cell" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-icon btn-sm"
-                        title="Edit User Details"
-                        onClick={() => openEditModal(u)}
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      {u.status === 'ACTIVE' ? (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-icon btn-sm"
-                          title="Suspend/Deactivate User"
-                          style={{ color: 'var(--color-danger)' }}
-                          disabled={u.userId === currentUser?.userId}
-                          onClick={() => handleDeactivate(u.userId)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                      {u.userId === currentUser?.userId ? (
+                        <span style={{ color: 'var(--color-text-muted)', paddingRight: '8px', userSelect: 'none' }}>—</span>
                       ) : (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-icon btn-sm"
-                          title="Reactivate User"
-                          style={{ color: 'var(--color-success)' }}
-                          onClick={() => handleReactivate(u)}
-                        >
-                          <CheckCircle size={14} />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-icon btn-sm"
+                            title="Edit User Details"
+                            onClick={() => openEditModal(u)}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          {u.status === 'ACTIVE' ? (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-sm"
+                              title="Suspend/Deactivate User"
+                              style={{ color: 'var(--color-danger)' }}
+                              onClick={() => handleDeactivate(u.userId)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-sm"
+                              title="Reactivate User"
+                              style={{ color: 'var(--color-success)' }}
+                              onClick={() => handleReactivate(u)}
+                            >
+                              <CheckCircle size={14} />
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </td>
@@ -487,39 +518,39 @@ export default function AdminUserManagementPage() {
                 />
               </div>
 
-              {modalMode === 'EDIT' && (
-                <div className="form-group">
-                  <label className="form-label">
-                    Security Password <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>(leave blank to keep unchanged)</span>
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      className="form-input"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      minLength={8}
-                    />
-                    <button
-                      type="button"
-                      style={{
-                        position: 'absolute',
-                        right: '12px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--color-text-muted)'
-                      }}
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
+              <div className="form-group">
+                <label className="form-label">
+                  Security Password {modalMode === 'EDIT' && <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>(leave blank to keep unchanged)</span>}
+                  {modalMode === 'CREATE' && <span className="required">*</span>}
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    className="form-input"
+                    placeholder={modalMode === 'CREATE' ? 'Min. 8 chars (caps, small, digit, symbol)' : '••••••••'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    required={modalMode === 'CREATE'}
+                    minLength={8}
+                  />
+                  <button
+                    type="button"
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--color-text-muted)'
+                    }}
+                    onClick={() => setShowPassword(!showPassword)}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
-              )}
+              </div>
 
               <div className="form-row">
                 <div className="form-group">
@@ -528,6 +559,7 @@ export default function AdminUserManagementPage() {
                     className="form-select"
                     value={role}
                     onChange={e => setRole(e.target.value)}
+                    disabled={modalMode === 'EDIT' && selectedUser?.userId === currentUser?.userId}
                   >
                     {AVAILABLE_ROLES.map(r => (
                       <option key={r} value={r}>
@@ -543,6 +575,7 @@ export default function AdminUserManagementPage() {
                     className="form-select"
                     value={status}
                     onChange={e => setStatus(e.target.value)}
+                    disabled={modalMode === 'EDIT' && selectedUser?.userId === currentUser?.userId}
                   >
                     <option value="ACTIVE">ACTIVE</option>
                     <option value="INACTIVE">SUSPENDED</option>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   getEncounterById,
@@ -8,7 +8,7 @@ import {
   updateEncounter
 } from '../../services/encounterService';
 import { getPatientById } from '../../services/patientService';
-import { getAllPrescriptions } from '../../services/prescriptionService';
+import { getAllPrescriptions, deletePrescription } from '../../services/prescriptionService';
 import { getAllOrders, cancelLabOrder } from '../../services/labService';
 import type { EncounterResponseDto, PatientResponseDto, PrescriptionResponseDto, LabOrderResponseDto } from '../../models/types';
 import LabOrdersTable from '../../components/ui/LabOrdersTable';
@@ -31,14 +31,17 @@ import {
   Info,
   Plus,
   Save,
-  Printer,
-  Share2,
   ListFilter
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { validateVitals, validateSoapNote, validateForSigning } from '../../utils/validation';
+import type { VitalsErrors, VitalsWarnings } from '../../utils/validation';
+import { Modal } from '../../components/ui/components';
+import { ICD10_CODES, validateDiagnosisInput } from '../../utils/icd10Codes';
 import '../../assets/styles/encounters/encounter.css';
 
 type TabType = 'Overview' | 'SOAP Notes' | 'Diagnosis' | 'Orders' | 'Prescriptions' | 'Timeline';
+const TAB_ICONS: Record<TabType, React.ElementType> = { Overview: Activity, 'SOAP Notes': FileText, Diagnosis: ClipboardList, Orders: ListFilter, Prescriptions: Pill, Timeline: Clock };
 
 export default function EncounterDetailPage() {
   const { user } = useAuth();
@@ -47,7 +50,7 @@ export default function EncounterDetailPage() {
   const [encounter, setEncounter] = useState<EncounterResponseDto | null>(null);
   const [patient, setPatient] = useState<PatientResponseDto | null>(null);
   const [prescriptions, setPrescriptions] = useState<PrescriptionResponseDto[]>([]);
-  const [realLabOrders, setRealLabOrders] = useState<LabOrderResponseDto[]>([]);
+  
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   
@@ -74,8 +77,28 @@ export default function EncounterDetailPage() {
   // Diagnosis State
   const [newDiagnosis, setNewDiagnosis] = useState('');
   const [diagnosesList, setDiagnosesList] = useState<string[]>([]);
+  const [diagSuggestions, setDiagSuggestions] = useState<{ code: string; description: string }[]>([]);
+  const [showDiagDropdown, setShowDiagDropdown] = useState(false);
+  const [diagError, setDiagError] = useState('');
 
-  // Orders State (handled via realLabOrders)
+  // Vitals Validation
+  const [vitalsErrors, setVitalsErrors] = useState<VitalsErrors>({});
+  const [vitalsWarnings, setVitalsWarnings] = useState<VitalsWarnings>({});
+
+  // SOAP Validation
+  const [soapError, setSoapError] = useState('');
+
+  // Confirmation Modals
+  const [showSignModal, setShowSignModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDeleteRxModal, setShowDeleteRxModal] = useState(false);
+  const [pendingDeleteRxId, setPendingDeleteRxId] = useState<number | null>(null);
+  const [showCancelLabModal, setShowCancelLabModal] = useState(false);
+  const [pendingCancelLabId, setPendingCancelLabId] = useState<number | null>(null);
+  const [signMissing, setSignMissing] = useState<string[]>([]);
+
+  // Lab Orders State
+  const [realLabOrders, setRealLabOrders] = useState<LabOrderResponseDto[]>([]);
 
   useEffect(() => {
     loadEncounterDetails();
@@ -113,11 +136,11 @@ export default function EncounterDetailPage() {
         setSoapPlan(notes.plan || '');
       }
 
-      // Parse Diagnoses & Orders
+      // Parse Diagnoses
       const diags = safeParse(encData.diagnosesJson) as string[] | null;
       setDiagnosesList(diags || []);
 
-
+      // Fetch real lab orders for this encounter
       try {
         const allOrders = await getAllOrders();
         const encounterOrders = allOrders.filter(o => o.encounterId === Number(id));
@@ -125,7 +148,7 @@ export default function EncounterDetailPage() {
       } catch (labErr) {
         console.error('Failed to load real lab orders', labErr);
       }
-
+      
       try {
         const allRx = await getAllPrescriptions();
         const encounterRx = allRx.filter(rx => rx.encounterId === Number(id));
@@ -147,8 +170,37 @@ export default function EncounterDetailPage() {
     catch { return null; }
   };
 
+  const buildPayload = (overrides: Partial<{ vitalsJson: string; notesJson: string; diagnosesJson: string }> = {}) => ({
+    patientId: encounter!.patientId,
+    visitType: encounter!.visitType,
+    chiefComplaint: encounter!.chiefComplaint,
+    vitalsJson: overrides.vitalsJson ?? encounter!.vitalsJson,
+    notesJson: overrides.notesJson ?? encounter!.notesJson,
+    diagnosesJson: overrides.diagnosesJson ?? encounter!.diagnosesJson,
+    ordersJson: encounter!.ordersJson,
+    status: encounter!.status
+  });
+
   const handleSaveVitals = async () => {
     if (!encounter) return;
+
+    // Validate vitals
+    const { errors, warnings, isValid } = validateVitals({
+      temp: vitalsTemp, pulse: vitalsPulse, spo2: vitalsSpo2, rr: vitalsRr,
+      weight: vitalsWeight, height: vitalsHeight, bpSystolic: vitalsBpSystolic, bpDiastolic: vitalsBpDiastolic
+    });
+    setVitalsErrors(errors);
+    setVitalsWarnings(warnings);
+    if (!isValid) {
+      toast.error('Please fix vitals errors before saving.');
+      return;
+    }
+    // Show warnings but allow save
+    const warningCount = Object.keys(warnings).length;
+    if (warningCount > 0) {
+      toast(`${warningCount} vital(s) flagged as abnormal — review recommended.`, { icon: '⚠️' });
+    }
+
     setActionLoading(true);
     try {
       const updatedVitalsJson = JSON.stringify({
@@ -163,17 +215,7 @@ export default function EncounterDetailPage() {
         rr: vitalsRr
       });
 
-      const updated = await updateEncounter(encounter.encounterId, {
-        patientId: encounter.patientId,
-        visitType: encounter.visitType,
-        chiefComplaint: encounter.chiefComplaint,
-        vitalsJson: updatedVitalsJson,
-        notesJson: encounter.notesJson,
-        diagnosesJson: encounter.diagnosesJson,
-        ordersJson: encounter.ordersJson,
-        status: encounter.status
-      });
-
+      const updated = await updateEncounter(encounter.encounterId, buildPayload({ vitalsJson: updatedVitalsJson }));
       setEncounter(updated);
       toast.success('Patient vitals saved successfully!');
     } catch (err) {
@@ -186,6 +228,16 @@ export default function EncounterDetailPage() {
 
   const handleSaveSoapNote = async (field: 'subjective' | 'objective' | 'assessment' | 'plan') => {
     if (!encounter) return;
+
+    const fieldMap = { subjective: soapSubjective, objective: soapObjective, assessment: soapAssessment, plan: soapPlan };
+    const result = validateSoapNote(fieldMap[field], field.charAt(0).toUpperCase() + field.slice(1));
+    if (!result.isValid) {
+      setSoapError(result.error || '');
+      toast.error(result.error || 'Invalid SOAP note.');
+      return;
+    }
+    setSoapError('');
+
     setActionLoading(true);
     try {
       const updatedNotes = {
@@ -195,17 +247,7 @@ export default function EncounterDetailPage() {
         plan: soapPlan
       };
 
-      const updated = await updateEncounter(encounter.encounterId, {
-        patientId: encounter.patientId,
-        visitType: encounter.visitType,
-        chiefComplaint: encounter.chiefComplaint,
-        vitalsJson: encounter.vitalsJson,
-        notesJson: JSON.stringify(updatedNotes),
-        diagnosesJson: encounter.diagnosesJson,
-        ordersJson: encounter.ordersJson,
-        status: encounter.status
-      });
-
+      const updated = await updateEncounter(encounter.encounterId, buildPayload({ notesJson: JSON.stringify(updatedNotes) }));
       setEncounter(updated);
       setEditingSoap(null);
       toast.success(`SOAP ${field.toUpperCase()} note saved!`);
@@ -217,25 +259,55 @@ export default function EncounterDetailPage() {
     }
   };
 
+  const handleDiagnosisSearch = (val: string) => {
+    setNewDiagnosis(val);
+    setDiagError('');
+    if (!val.trim()) {
+      setDiagSuggestions([]);
+      setShowDiagDropdown(false);
+      return;
+    }
+    const query = val.toLowerCase();
+    const matches = ICD10_CODES.filter(
+      item =>
+        item.code.toLowerCase().includes(query) ||
+        item.description.toLowerCase().includes(query)
+    ).slice(0, 8);
+    setDiagSuggestions(matches);
+    setShowDiagDropdown(matches.length > 0);
+  };
+
+  const selectDiagnosis = (item: { code: string; description: string }) => {
+    setNewDiagnosis(`${item.code} - ${item.description}`);
+    setDiagSuggestions([]);
+    setShowDiagDropdown(false);
+    setDiagError('');
+  };
+
   const handleAddDiagnosis = async () => {
     if (!encounter || !newDiagnosis.trim()) return;
+
+    // Validate ICD-10 format
+    if (!validateDiagnosisInput(newDiagnosis.trim())) {
+      setDiagError('Invalid format. Use ICD-10 code (e.g. J06.9) or select from suggestions.');
+      return;
+    }
+
+    // Check for duplicates
+    if (diagnosesList.includes(newDiagnosis.trim())) {
+      setDiagError('This diagnosis has already been added.');
+      return;
+    }
+
     setActionLoading(true);
     try {
       const updatedList = [...diagnosesList, newDiagnosis.trim()];
-      const updated = await updateEncounter(encounter.encounterId, {
-        patientId: encounter.patientId,
-        visitType: encounter.visitType,
-        chiefComplaint: encounter.chiefComplaint,
-        vitalsJson: encounter.vitalsJson,
-        notesJson: encounter.notesJson,
-        diagnosesJson: JSON.stringify(updatedList),
-        ordersJson: encounter.ordersJson,
-        status: encounter.status
-      });
+      const updated = await updateEncounter(encounter.encounterId, buildPayload({ diagnosesJson: JSON.stringify(updatedList) }));
 
       setEncounter(updated);
       setDiagnosesList(updatedList);
       setNewDiagnosis('');
+      setDiagError('');
       toast.success('Diagnosis added.');
     } catch (err) {
       console.error(err);
@@ -245,13 +317,35 @@ export default function EncounterDetailPage() {
     }
   };
 
-
-
-  const handleCancelLabOrder = async (orderId: number) => {
-    if (!confirm('Are you sure you want to cancel this lab order?')) return;
+  const handleRemoveDiagnosis = async (index: number) => {
+    if (!encounter) return;
     setActionLoading(true);
     try {
-      await cancelLabOrder(orderId);
+      const updatedList = diagnosesList.filter((_, i) => i !== index);
+      const updated = await updateEncounter(encounter.encounterId, buildPayload({ diagnosesJson: JSON.stringify(updatedList) }));
+
+      setEncounter(updated);
+      setDiagnosesList(updatedList);
+      toast.success('Diagnosis removed.');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to remove diagnosis.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCancelLabOrder = async (orderId: number) => {
+    setPendingCancelLabId(orderId);
+    setShowCancelLabModal(true);
+  };
+
+  const confirmCancelLabOrder = async () => {
+    if (!pendingCancelLabId) return;
+    setShowCancelLabModal(false);
+    setActionLoading(true);
+    try {
+      await cancelLabOrder(pendingCancelLabId);
       toast.success('Lab order cancelled successfully.');
       const allOrders = await getAllOrders();
       const encounterOrders = allOrders.filter(o => o.encounterId === Number(id));
@@ -261,15 +355,57 @@ export default function EncounterDetailPage() {
       toast.error(err.message || 'Failed to cancel lab order.');
     } finally {
       setActionLoading(false);
+      setPendingCancelLabId(null);
+    }
+  };
+
+  const confirmDeleteRx = async () => {
+    if (!pendingDeleteRxId) return;
+    setShowDeleteRxModal(false);
+    try {
+      await deletePrescription(pendingDeleteRxId);
+      setPrescriptions(prev => prev.filter(p => p.rxId !== pendingDeleteRxId));
+      toast.success('Prescription removed.');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to remove prescription.');
+    } finally {
+      setPendingDeleteRxId(null);
     }
   };
 
   const handleComplete = async () => {
     if (!encounter || encounter.status !== 'IN_PROGRESS') return;
+
+    // Pre-sign completeness validation
+    const check = validateForSigning({
+      bpSystolic: vitalsBpSystolic, bpDiastolic: vitalsBpDiastolic,
+      temp: vitalsTemp, pulse: vitalsPulse,
+      subjective: soapSubjective, assessment: soapAssessment,
+      diagnosesCount: diagnosesList.length
+    });
+
+    if (!check.canSign) {
+      setSignMissing(check.missing);
+      setShowSignModal(true);
+      return;
+    }
+
+    setSignMissing([]);
+    setShowSignModal(true);
+  };
+
+  const confirmSign = async () => {
+    if (!encounter) return;
+    setShowSignModal(false);
     setActionLoading(true);
     try {
       const updated = await completeEncounter(encounter.encounterId);
       setEncounter(updated);
+
+      // The backend atomically completes the linked appointment (if any)
+      // when the encounter is signed, so no client-side appointment update
+      // is needed here.
       toast.success('Encounter signed and completed!');
     } catch (err) {
       console.error('Failed to complete encounter', err);
@@ -281,7 +417,12 @@ export default function EncounterDetailPage() {
 
   const handleDelete = async () => {
     if (!encounter) return;
-    if (!confirm('Are you sure you want to delete this encounter?')) return;
+    setShowDeleteModal(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!encounter) return;
+    setShowDeleteModal(false);
     setActionLoading(true);
     try {
       await deleteEncounter(encounter.encounterId);
@@ -384,11 +525,11 @@ export default function EncounterDetailPage() {
               <button className="btn btn-primary" style={{ background: '#10b981', borderColor: '#10b981' }} onClick={handleComplete} disabled={actionLoading}>
                 <CheckCircle size={16} /> {actionLoading ? 'Signing...' : 'Sign Encounter'}
               </button>
+              <button className="btn btn-danger" onClick={handleDelete} disabled={actionLoading}>
+                <Trash2 size={16} /> Delete
+              </button>
             </>
           )}
-          <button className="btn btn-danger" onClick={handleDelete} disabled={actionLoading}>
-            <Trash2 size={16} /> Delete
-          </button>
         </div>
       )}
 
@@ -445,20 +586,10 @@ export default function EncounterDetailPage() {
       {/* Redesigned Premium Segmented Tabs Control Bar */}
       <div className="encounter-tabs-bar">
         {(['Overview', 'SOAP Notes', 'Diagnosis', 'Orders', 'Prescriptions', 'Timeline'] as TabType[]).map(tab => {
+          const Icon = TAB_ICONS[tab];
           return (
-            <button
-              key={tab}
-              type="button"
-              className={`encounter-tab-item ${activeTab === tab ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab === 'Overview' && <Activity size={16} />}
-              {tab === 'SOAP Notes' && <FileText size={16} />}
-              {tab === 'Diagnosis' && <ClipboardList size={16} />}
-              {tab === 'Orders' && <ListFilter size={16} />}
-              {tab === 'Prescriptions' && <Pill size={16} />}
-              {tab === 'Timeline' && <Clock size={16} />}
-              {tab}
+            <button key={tab} type="button" className={`encounter-tab-item ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
+              <Icon size={16} /> {tab}
             </button>
           );
         })}
@@ -503,104 +634,43 @@ export default function EncounterDetailPage() {
                   </div>
 
                   <div className="vitals-summary-grid">
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#fef2f2', color: '#ef4444' }}>
-                        <Heart size={16} />
+                    {[
+                      { icon: <Heart size={16} />, bg: '#fef2f2', color: '#ef4444', value: vitalsBpSystolic && vitalsBpDiastolic ? `${vitalsBpSystolic}/${vitalsBpDiastolic}` : '—', label: 'BP', sub: 'mmHg' },
+                      { icon: <Activity size={16} />, bg: '#fff7ed', color: '#f97316', value: vitalsTemp ? `${vitalsTemp}°C` : '—', label: 'Temp', sub: 'Celsius' },
+                      { icon: <HeartPulse size={16} />, bg: '#fdf2f8', color: '#ec4899', value: vitalsPulse ? `${vitalsPulse} bpm` : '—', label: 'Pulse', sub: 'Beats/Min' },
+                      { icon: <Activity size={16} />, bg: '#eff6ff', color: '#3b82f6', value: vitalsSpo2 ? `${vitalsSpo2}%` : '—', label: 'SpO2', sub: 'Oxygen Sat' },
+                      { icon: <Info size={16} />, bg: '#faf5ff', color: '#a855f7', value: vitalsWeight ? `${vitalsWeight} kg` : '—', label: 'Weight', sub: 'Kilograms' },
+                      { icon: <Info size={16} />, bg: '#f0fdf4', color: '#22c55e', value: vitalsHeight ? `${vitalsHeight} cm` : '—', label: 'Height', sub: 'Centimeters' },
+                      { icon: <Activity size={16} />, bg: '#ecfdf5', color: '#10b981', value: vitalsRr ? `${vitalsRr} /m` : '—', label: 'RR', sub: 'Resp Rate' },
+                    ].map(v => (
+                      <div className="vital-stat-box" key={v.label}>
+                        <div className="vital-stat-icon-wrapper" style={{ background: v.bg, color: v.color }}>{v.icon}</div>
+                        <div className="vital-stat-value">{v.value}</div>
+                        <div className="vital-stat-label">{v.label}</div>
+                        <div className="vital-stat-sublabel">{v.sub}</div>
                       </div>
-                      <div className="vital-stat-value">{vitalsBpSystolic && vitalsBpDiastolic ? `${vitalsBpSystolic}/${vitalsBpDiastolic}` : '—'}</div>
-                      <div className="vital-stat-label">BP</div>
-                      <div className="vital-stat-sublabel">mmHg</div>
-                    </div>
-
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#fff7ed', color: '#f97316' }}>
-                        <Activity size={16} />
-                      </div>
-                      <div className="vital-stat-value">{vitalsTemp ? `${vitalsTemp}°C` : '—'}</div>
-                      <div className="vital-stat-label">Temp</div>
-                      <div className="vital-stat-sublabel">Celsius</div>
-                    </div>
-
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#fdf2f8', color: '#ec4899' }}>
-                        <HeartPulse size={16} />
-                      </div>
-                      <div className="vital-stat-value">{vitalsPulse ? `${vitalsPulse} bpm` : '—'}</div>
-                      <div className="vital-stat-label">Pulse</div>
-                      <div className="vital-stat-sublabel">Beats/Min</div>
-                    </div>
-
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#eff6ff', color: '#3b82f6' }}>
-                        <Activity size={16} />
-                      </div>
-                      <div className="vital-stat-value">{vitalsSpo2 ? `${vitalsSpo2}%` : '—'}</div>
-                      <div className="vital-stat-label">SpO2</div>
-                      <div className="vital-stat-sublabel">Oxygen Sat</div>
-                    </div>
-
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#faf5ff', color: '#a855f7' }}>
-                        <Info size={16} />
-                      </div>
-                      <div className="vital-stat-value">{vitalsWeight ? `${vitalsWeight} kg` : '—'}</div>
-                      <div className="vital-stat-label">Weight</div>
-                      <div className="vital-stat-sublabel">Kilograms</div>
-                    </div>
-
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#f0fdf4', color: '#22c55e' }}>
-                        <Info size={16} />
-                      </div>
-                      <div className="vital-stat-value">{vitalsHeight ? `${vitalsHeight} cm` : '—'}</div>
-                      <div className="vital-stat-label">Height</div>
-                      <div className="vital-stat-sublabel">Centimeters</div>
-                    </div>
-
-                    <div className="vital-stat-box">
-                      <div className="vital-stat-icon-wrapper" style={{ background: '#ecfdf5', color: '#10b981' }}>
-                        <Activity size={16} />
-                      </div>
-                      <div className="vital-stat-value">{vitalsRr ? `${vitalsRr} /m` : '—'}</div>
-                      <div className="vital-stat-label">RR</div>
-                      <div className="vital-stat-sublabel">Resp Rate</div>
-                    </div>
+                    ))}
                   </div>
 
                   {encounter.status === 'IN_PROGRESS' && (
                     <div className="vitals-inputs-grid">
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>TEMP (°C)</label>
-                        <input className="form-input" type="text" value={vitalsTemp} onChange={e => setVitalsTemp(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>PULSE (BPM)</label>
-                        <input className="form-input" type="text" value={vitalsPulse} onChange={e => setVitalsPulse(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>SPO2 (%)</label>
-                        <input className="form-input" type="text" value={vitalsSpo2} onChange={e => setVitalsSpo2(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>RR (/MIN)</label>
-                        <input className="form-input" type="text" value={vitalsRr} onChange={e => setVitalsRr(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>WEIGHT (KG)</label>
-                        <input className="form-input" type="text" value={vitalsWeight} onChange={e => setVitalsWeight(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>HEIGHT (CM)</label>
-                        <input className="form-input" type="text" value={vitalsHeight} onChange={e => setVitalsHeight(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>BP SYSTOLIC</label>
-                        <input className="form-input" type="text" value={vitalsBpSystolic} onChange={e => setVitalsBpSystolic(e.target.value)} />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.6875rem' }}>BP DIASTOLIC</label>
-                        <input className="form-input" type="text" value={vitalsBpDiastolic} onChange={e => setVitalsBpDiastolic(e.target.value)} />
-                      </div>
+                      {[
+                        { key: 'temp' as const, label: 'TEMP (°C)', value: vitalsTemp, set: setVitalsTemp, hasWarning: true },
+                        { key: 'pulse' as const, label: 'PULSE (BPM)', value: vitalsPulse, set: setVitalsPulse, hasWarning: true },
+                        { key: 'spo2' as const, label: 'SPO2 (%)', value: vitalsSpo2, set: setVitalsSpo2, hasWarning: true },
+                        { key: 'rr' as const, label: 'RR (/MIN)', value: vitalsRr, set: setVitalsRr, hasWarning: true },
+                        { key: 'weight' as const, label: 'WEIGHT (KG)', value: vitalsWeight, set: setVitalsWeight, hasWarning: false },
+                        { key: 'height' as const, label: 'HEIGHT (CM)', value: vitalsHeight, set: setVitalsHeight, hasWarning: false },
+                        { key: 'bpSystolic' as const, label: 'BP SYSTOLIC', value: vitalsBpSystolic, set: setVitalsBpSystolic, hasWarning: true },
+                        { key: 'bpDiastolic' as const, label: 'BP DIASTOLIC', value: vitalsBpDiastolic, set: setVitalsBpDiastolic, hasWarning: true },
+                      ].map(f => (
+                        <div className="form-group" key={f.key}>
+                          <label className="form-label" style={{ fontSize: '0.6875rem' }}>{f.label}</label>
+                          <input className="form-input" type="text" value={f.value} onChange={e => f.set(e.target.value)} style={vitalsErrors[f.key] ? { borderColor: '#ef4444' } : f.hasWarning && vitalsWarnings[f.key] ? { borderColor: '#f59e0b' } : {}} />
+                          {vitalsErrors[f.key] && <div style={{ color: '#ef4444', fontSize: '0.6875rem', marginTop: '2px' }}>{vitalsErrors[f.key]}</div>}
+                          {!vitalsErrors[f.key] && f.hasWarning && vitalsWarnings[f.key] && <div style={{ color: '#f59e0b', fontSize: '0.6875rem', marginTop: '2px' }}>⚠ {vitalsWarnings[f.key]}</div>}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -645,129 +715,34 @@ export default function EncounterDetailPage() {
 
           {activeTab === 'SOAP Notes' && (
             <div className="soap-card-container">
-              {/* Subjective */}
-              <div className="soap-field-card">
-                <div className="soap-field-header">
-                  <span className="soap-field-title" style={{ color: '#2563eb' }}>S — Subjective</span>
-                  {editingSoap !== 'subjective' && encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                    <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap('subjective')}>
-                      <Edit size={14} /> Edit
-                    </button>
+              {([
+                { key: 'subjective' as const, letter: 'S', title: 'Subjective', color: '#2563eb', desc: "Patient's reported symptoms, history, and chief complaint", value: soapSubjective, set: setSoapSubjective },
+                { key: 'objective' as const, letter: 'O', title: 'Objective', color: '#2563eb', desc: 'Physical exam findings, observations, and vital measurements', value: soapObjective, set: setSoapObjective },
+                { key: 'assessment' as const, letter: 'A', title: 'Assessment', color: '#d97706', desc: 'Clinical impression, differential diagnosis, and assessment', value: soapAssessment, set: setSoapAssessment },
+                { key: 'plan' as const, letter: 'P', title: 'Plan', color: '#10b981', desc: 'Treatment plan, lab orders, prescriptions, and follow-up instructions', value: soapPlan, set: setSoapPlan },
+              ] as const).map(s => (
+                <div className="soap-field-card" key={s.key}>
+                  <div className="soap-field-header">
+                    <span className="soap-field-title" style={{ color: s.color }}>{s.letter} — {s.title}</span>
+                    {editingSoap !== s.key && encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap(s.key)}><Edit size={14} /> Edit</button>
+                    )}
+                  </div>
+                  <div className="soap-field-desc">{s.desc}</div>
+                  {editingSoap === s.key ? (
+                    <div>
+                      <textarea className="form-textarea" value={s.value} onChange={e => { s.set(e.target.value); setSoapError(''); }} rows={4} style={soapError && editingSoap === s.key ? { borderColor: '#ef4444' } : {}} />
+                      {soapError && editingSoap === s.key && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{soapError}</div>}
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
+                        <button className="btn btn-secondary btn-sm" onClick={() => { setEditingSoap(null); setSoapError(''); }}>Cancel</button>
+                        <button className="btn btn-primary btn-sm" onClick={() => handleSaveSoapNote(s.key)} disabled={actionLoading}>Save</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={`soap-field-content ${!s.value ? 'soap-field-empty' : ''}`}>{s.value || 'No notes recorded'}</div>
                   )}
                 </div>
-                <div className="soap-field-desc">Patient's reported symptoms, history, and chief complaint</div>
-                {editingSoap === 'subjective' ? (
-                  <div>
-                    <textarea
-                      className="form-textarea"
-                      value={soapSubjective}
-                      onChange={e => setSoapSubjective(e.target.value)}
-                      rows={4}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
-                      <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={() => handleSaveSoapNote('subjective')} disabled={actionLoading}>Save</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`soap-field-content ${!soapSubjective ? 'soap-field-empty' : ''}`}>
-                    {soapSubjective || 'No notes recorded'}
-                  </div>
-                )}
-              </div>
-
-              {/* Objective */}
-              <div className="soap-field-card">
-                <div className="soap-field-header">
-                  <span className="soap-field-title" style={{ color: '#2563eb' }}>O — Objective</span>
-                  {editingSoap !== 'objective' && encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                    <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap('objective')}>
-                      <Edit size={14} /> Edit
-                    </button>
-                  )}
-                </div>
-                <div className="soap-field-desc">Physical exam findings, observations, and vital measurements</div>
-                {editingSoap === 'objective' ? (
-                  <div>
-                    <textarea
-                      className="form-textarea"
-                      value={soapObjective}
-                      onChange={e => setSoapObjective(e.target.value)}
-                      rows={4}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
-                      <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={() => handleSaveSoapNote('objective')} disabled={actionLoading}>Save</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`soap-field-content ${!soapObjective ? 'soap-field-empty' : ''}`}>
-                    {soapObjective || 'No notes recorded'}
-                  </div>
-                )}
-              </div>
-
-              {/* Assessment */}
-              <div className="soap-field-card">
-                <div className="soap-field-header">
-                  <span className="soap-field-title" style={{ color: '#d97706' }}>A — Assessment</span>
-                  {editingSoap !== 'assessment' && encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                    <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap('assessment')}>
-                      <Edit size={14} /> Edit
-                    </button>
-                  )}
-                </div>
-                <div className="soap-field-desc">Clinical impression, differential diagnosis, and assessment</div>
-                {editingSoap === 'assessment' ? (
-                  <div>
-                    <textarea
-                      className="form-textarea"
-                      value={soapAssessment}
-                      onChange={e => setSoapAssessment(e.target.value)}
-                      rows={4}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
-                      <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={() => handleSaveSoapNote('assessment')} disabled={actionLoading}>Save</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`soap-field-content ${!soapAssessment ? 'soap-field-empty' : ''}`}>
-                    {soapAssessment || 'No notes recorded'}
-                  </div>
-                )}
-              </div>
-
-              {/* Plan */}
-              <div className="soap-field-card">
-                <div className="soap-field-header">
-                  <span className="soap-field-title" style={{ color: '#10b981' }}>P — Plan</span>
-                  {editingSoap !== 'plan' && encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                    <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap('plan')}>
-                      <Edit size={14} /> Edit
-                    </button>
-                  )}
-                </div>
-                <div className="soap-field-desc">Treatment plan, lab orders, prescriptions, and follow-up instructions</div>
-                {editingSoap === 'plan' ? (
-                  <div>
-                    <textarea
-                      className="form-textarea"
-                      value={soapPlan}
-                      onChange={e => setSoapPlan(e.target.value)}
-                      rows={4}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
-                      <button className="btn btn-secondary btn-sm" onClick={() => setEditingSoap(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={() => handleSaveSoapNote('plan')} disabled={actionLoading}>Save</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`soap-field-content ${!soapPlan ? 'soap-field-empty' : ''}`}>
-                    {soapPlan || 'No notes recorded'}
-                  </div>
-                )}
-              </div>
+              ))}
             </div>
           )}
 
@@ -778,17 +753,48 @@ export default function EncounterDetailPage() {
               </div>
               <div className="section-card-body">
                 {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="Type diagnosis (e.g. J06.9 - Acute upper respiratory infection)"
-                      value={newDiagnosis}
-                      onChange={e => setNewDiagnosis(e.target.value)}
-                    />
-                    <button className="btn btn-primary" onClick={handleAddDiagnosis} disabled={actionLoading}>
-                      <Plus size={16} /> Add Diagnosis
-                    </button>
+                  <div style={{ marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', gap: '10px', position: 'relative' }}>
+                      <div style={{ flex: 1, position: 'relative' }}>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="Search ICD-10 code or description (e.g. J06.9, headache, diabetes)"
+                          value={newDiagnosis}
+                          onChange={e => handleDiagnosisSearch(e.target.value)}
+                          onFocus={() => setShowDiagDropdown(diagSuggestions.length > 0)}
+                          onBlur={() => setTimeout(() => setShowDiagDropdown(false), 200)}
+                          style={{ borderColor: diagError ? 'var(--color-danger)' : undefined }}
+                        />
+                        {showDiagDropdown && diagSuggestions.length > 0 && (
+                          <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50 }}>
+                            {diagSuggestions.map(item => (
+                              <div
+                                key={item.code}
+                                className="autocomplete-item"
+                                onMouseDown={() => selectDiagnosis(item)}
+                              >
+                                <div className="autocomplete-item-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontWeight: '700', color: '#2563eb', fontSize: '0.8125rem', background: '#eff6ff', padding: '2px 6px', borderRadius: '4px' }}>{item.code}</span>
+                                  <span>{item.description}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button className="btn btn-primary" onClick={handleAddDiagnosis} disabled={actionLoading}>
+                        <Plus size={16} /> Add Diagnosis
+                      </button>
+                    </div>
+                    {diagError && (
+                      <div style={{ color: 'var(--color-danger)', fontSize: '0.75rem', marginTop: '6px' }}>
+                        {diagError}
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '6px' }}>
+                      Format: ICD-10 code (e.g. <strong>R51</strong>, <strong>J06.9</strong>) or select from suggestions. Manual entry must follow ICD-10 format.
+                    </div>
                   </div>
                 )}
 
@@ -796,38 +802,60 @@ export default function EncounterDetailPage() {
                   <div className="dashed-empty-box">
                     <div className="dashed-empty-icon">🩺</div>
                     <h4>No Diagnosis Logged</h4>
-                    <p>Add diagnosis codes or clinical findings to this encounter.</p>
+                    <p>Add ICD-10 diagnosis codes to this encounter.</p>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {diagnosesList.map((diag, index) => (
-                      <div
-                        key={index}
-                        style={{
-                          padding: '12px 16px',
-                          background: '#f8fafc',
-                          border: '1px solid var(--color-border)',
-                          borderRadius: 'var(--radius-md)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between'
-                        }}
-                      >
-                        <div style={{ fontWeight: '500', color: 'var(--color-text)' }}>{diag}</div>
-                        <span className="badge badge-success">ICD-10</span>
-                      </div>
-                    ))}
+                    {diagnosesList.map((diag, index) => {
+                      const parts = diag.split(' - ');
+                      const code = parts[0];
+                      const desc = parts.slice(1).join(' - ');
+                      return (
+                        <div
+                          key={index}
+                          style={{
+                            padding: '12px 16px',
+                            background: '#f8fafc',
+                            border: '1px solid var(--color-border)',
+                            borderRadius: 'var(--radius-md)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontWeight: '700', color: '#2563eb', fontSize: '0.8125rem', background: '#eff6ff', padding: '4px 8px', borderRadius: '4px' }}>{code}</span>
+                            {desc && <span style={{ fontWeight: '500', color: 'var(--color-text)' }}>{desc}</span>}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span className="badge badge-success">ICD-10</span>
+                            {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-icon"
+                                style={{ color: '#ef4444', padding: '4px', minWidth: 'auto', height: 'auto' }}
+                                onClick={() => handleRemoveDiagnosis(index)}
+                                disabled={actionLoading}
+                                title="Remove diagnosis"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {activeTab === 'Orders' && (
+         {activeTab === 'Orders' && (
             <div className="section-card">
               <div className="section-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 style={{ margin: 0 }}>Lab Orders</h3>
-                {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && realLabOrders.length > 0 && (
+                 {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && realLabOrders.length > 0 && (
                   <button 
                     className="btn btn-primary btn-sm" 
                     onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
@@ -838,29 +866,29 @@ export default function EncounterDetailPage() {
               </div>
               <div className="section-card-body">
                 {realLabOrders.length === 0 ? (
-                  <div className="dashed-empty-box">
+                     <div className="dashed-empty-box">
                     <div className="dashed-empty-icon" style={{ background: '#f5f3ff', color: '#8b5cf6' }}>🧪</div>
                     <h4>No lab orders yet</h4>
                     <p style={{ color: 'var(--color-text-secondary)' }}>Order investigations for this encounter</p>
                     
                     {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
-                      <button 
+                    <button 
                         className="btn btn-primary" 
                         style={{ marginTop: '16px' }}
                         onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
                       >
                         <Plus size={16} /> Create Lab Order
                       </button>
-                    )}
+                     )}
                   </div>
                 ) : (
-                  <LabOrdersTable
+               <LabOrdersTable
                     orders={realLabOrders}
                     context="encounter"
                     onCancelOrder={handleCancelLabOrder}
                     actionLoading={actionLoading}
                   />
-                )}
+                     )}
               </div>
             </div>
           )}
@@ -900,6 +928,7 @@ export default function EncounterDetailPage() {
                           <th>Dosage</th>
                           <th>Frequency</th>
                           <th>Duration</th>
+                          {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && <th style={{ textAlign: 'center' }}>Action</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -909,6 +938,39 @@ export default function EncounterDetailPage() {
                             <td>{rx.dosage}</td>
                             <td>{rx.frequency}</td>
                             <td>{rx.durationDays} days</td>
+                            {encounter.status === 'IN_PROGRESS' && user?.role === 'CLINICIAN' && (
+                              <td style={{ textAlign: 'center' }}>
+                                {rx.status === 'ISSUED' || rx.status === 'DISPENSED' || rx.status === 'ACTIVE' || rx.status === 'COMPLETED' ? (
+                                  <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>—</span>
+                                ) : (
+                                  <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-icon"
+                                      style={{ color: '#2563eb', padding: '4px', minWidth: 'auto', height: 'auto' }}
+                                      onClick={() => navigate(`/prescriptions/${rx.rxId}/edit`)}
+                                      title="Edit prescription"
+                                      disabled={actionLoading}
+                                    >
+                                      <Edit size={14} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-icon"
+                                      style={{ color: '#ef4444', padding: '4px', minWidth: 'auto', height: 'auto' }}
+                                      onClick={() => {
+                                        setPendingDeleteRxId(rx.rxId);
+                                        setShowDeleteRxModal(true);
+                                      }}
+                                      title="Remove prescription"
+                                      disabled={actionLoading}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -921,53 +983,25 @@ export default function EncounterDetailPage() {
 
           {activeTab === 'Timeline' && (
             <div className="section-card">
-              <div className="section-card-header">
-                <h3 style={{ margin: 0 }}>Clinical Timeline Logs</h3>
-              </div>
+              <div className="section-card-header"><h3 style={{ margin: 0 }}>Clinical Timeline Logs</h3></div>
               <div className="section-card-body" style={{ padding: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', position: 'relative' }}>
-                  {/* Vertical line connector */}
                   <div style={{ position: 'absolute', left: '11px', top: '4px', bottom: '4px', width: '2px', background: '#e2e8f0' }}></div>
-
-                  <div style={{ display: 'flex', gap: '16px', position: 'relative', zIndex: 1 }}>
-                    <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#dbeafe', border: '4px solid #ffffff', display: 'flex', alignItems: 'center', justifyItems: 'center', color: '#2563eb' }}></div>
-                    <div>
-                      <div style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--color-text)' }}>Encounter Started</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>Visit type initialized as {encounter.visitType} by {encounter.clinicianName}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '4px' }}>{formatDateTime(encounter.startAt)}</div>
-                    </div>
-                  </div>
-
-                  {(vitalsBpSystolic || vitalsTemp) && (
-                    <div style={{ display: 'flex', gap: '16px', position: 'relative', zIndex: 1 }}>
-                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#fee2e2', border: '4px solid #ffffff', display: 'flex', alignItems: 'center', justifyItems: 'center', color: '#ef4444' }}></div>
+                  {[
+                    { show: true, bg: '#dbeafe', color: '#2563eb', title: 'Encounter Started', desc: `Visit type initialized as ${encounter.visitType} by ${encounter.clinicianName}`, time: formatDateTime(encounter.startAt) },
+                    { show: !!(vitalsBpSystolic || vitalsTemp), bg: '#fee2e2', color: '#ef4444', title: 'Vitals Logged', desc: 'Initial physical markers and blood pressure values registered' },
+                    { show: !!(soapSubjective || soapAssessment), bg: '#fef3c7', color: '#d97706', title: 'SOAP Notes Drafted', desc: 'Clinician wrote down subjective symptoms and objective clinical observations' },
+                    { show: encounter.status === 'COMPLETED', bg: '#d1fae5', color: '#10b981', title: 'Encounter Signed & Closed', desc: `Signed digitally by ${encounter.signedByName || encounter.clinicianName}`, time: encounter.signedAt ? formatDateTime(encounter.signedAt) : undefined },
+                  ].filter(e => e.show).map(e => (
+                    <div key={e.title} style={{ display: 'flex', gap: '16px', position: 'relative', zIndex: 1 }}>
+                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: e.bg, border: '4px solid #ffffff', display: 'flex', alignItems: 'center', justifyItems: 'center', color: e.color }}></div>
                       <div>
-                        <div style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--color-text)' }}>Vitals Logged</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>Initial physical markers and blood pressure values registered</div>
+                        <div style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--color-text)' }}>{e.title}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>{e.desc}</div>
+                        {e.time && <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '4px' }}>{e.time}</div>}
                       </div>
                     </div>
-                  )}
-
-                  {(soapSubjective || soapAssessment) && (
-                    <div style={{ display: 'flex', gap: '16px', position: 'relative', zIndex: 1 }}>
-                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#fef3c7', border: '4px solid #ffffff', display: 'flex', alignItems: 'center', justifyItems: 'center', color: '#d97706' }}></div>
-                      <div>
-                        <div style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--color-text)' }}>SOAP Notes Drafted</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>Clinician wrote down subjective symptoms and objective clinical observations</div>
-                      </div>
-                    </div>
-                  )}
-
-                  {encounter.status === 'COMPLETED' && (
-                    <div style={{ display: 'flex', gap: '16px', position: 'relative', zIndex: 1 }}>
-                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#d1fae5', border: '4px solid #ffffff', display: 'flex', alignItems: 'center', justifyItems: 'center', color: '#10b981' }}></div>
-                      <div>
-                        <div style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--color-text)' }}>Encounter Signed & Closed</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>Signed digitally by {encounter.signedByName || encounter.clinicianName}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '4px' }}>{encounter.signedAt ? formatDateTime(encounter.signedAt) : '—'}</div>
-                      </div>
-                    </div>
-                  )}
+                  ))}
                 </div>
               </div>
             </div>
@@ -975,87 +1009,56 @@ export default function EncounterDetailPage() {
 
         </div>
 
-        {/* Right Side: Sticky Alerts & Quick Actions Sidebar (visible on all sections) */}
-        <div>
-          {/* Clinical Alerts Card */}
-          <div className="alerts-card">
-            <div className="alerts-header">
-              <AlertTriangle size={16} />
-              Clinical Alerts
-            </div>
-            <div className="alerts-body">
-              <div className="alert-subcard alert-subcard-red">
-                <div className="alert-subcard-label">Drug Allergy</div>
-                <div className="alert-subcard-val">Penicillin</div>
-              </div>
-              <div className="alert-subcard alert-subcard-grey">
-                <div className="alert-subcard-label">Blood Group</div>
-                <div className="alert-subcard-val">O+</div>
-              </div>
-              <div className="alert-subcard alert-subcard-grey">
-                <div className="alert-subcard-label">Insurance ID</div>
-                <div className="alert-subcard-val">{patient?.insuranceId || 'BCBS-112233'}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Quick Actions Card */}
-          <div className="section-card">
-            <div className="section-card-header" style={{ padding: '12px 16px' }}>
-              <h3 style={{ margin: 0, fontSize: 'var(--font-size-sm)', fontWeight: '600' }}>Quick Actions</h3>
-            </div>
-            <div className="section-card-body" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ justifyContent: 'flex-start', color: '#2563eb', borderColor: '#dbeafe' }}
-                onClick={() => setActiveTab('SOAP Notes')}
-              >
-                <FileText size={16} /> Add Note
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ justifyContent: 'flex-start', color: '#10b981', borderColor: '#a7f3d0' }}
-                onClick={() => navigate('/prescriptions/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
-              >
-                <Pill size={16} /> Add Prescription
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ justifyContent: 'flex-start', color: '#8b5cf6', borderColor: '#ddd6fe' }}
-                onClick={() => navigate('/lab/new', { state: { encounterId: encounter.encounterId, patientId: encounter.patientId } })}
-              >
-                <ClipboardList size={16} /> Order Lab
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ justifyContent: 'flex-start', color: '#64748b' }}
-                onClick={() => {
-                  toast.success('Printing Encounter summary...');
-                  window.print();
-                }}
-              >
-                <Printer size={16} /> Print Encounter
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ justifyContent: 'flex-start', color: '#64748b' }}
-                onClick={() => {
-                  navigator.clipboard.writeText(window.location.href);
-                  toast.success('Encounter link copied to clipboard!');
-                }}
-              >
-                <Share2 size={16} /> Share Encounter
-              </button>
-            </div>
-          </div>
-        </div>
-
       </div>
+
+      {/* Sign Encounter Modal */}
+      <Modal isOpen={showSignModal} onClose={() => setShowSignModal(false)} title={signMissing.length > 0 ? 'Cannot Sign Encounter' : 'Sign & Complete Encounter'}>
+        {signMissing.length > 0 ? (
+          <>
+            <p style={{ color: '#ef4444', fontWeight: 600 }}><AlertTriangle size={16} style={{ verticalAlign: 'middle' }} /> Complete these items before signing:</p>
+            <ul style={{ margin: '8px 0 16px 20px', lineHeight: 2 }}>{signMissing.map((m, i) => <li key={i}>{m}</li>)}</ul>
+            <div style={{ textAlign: 'right' }}><button className="btn btn-secondary" onClick={() => setShowSignModal(false)}>Close</button></div>
+          </>
+        ) : (
+          <>
+            <p><CheckCircle size={16} style={{ verticalAlign: 'middle', color: '#10b981' }} /> All required fields are complete. Signing marks the encounter as <strong>Completed</strong> and issues all DRAFT prescriptions. This cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px' }}>
+              <button className="btn btn-secondary" onClick={() => setShowSignModal(false)}>Cancel</button>
+              <button className="btn btn-primary" style={{ background: '#10b981', borderColor: '#10b981' }} onClick={confirmSign} disabled={actionLoading}>
+                <CheckCircle size={16} /> {actionLoading ? 'Signing...' : 'Confirm & Sign'}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+
+      {/* Delete Encounter Modal */}
+      <Modal isOpen={showDeleteModal} onClose={() => setShowDeleteModal(false)} title="Delete Encounter">
+        <p>Permanently delete <strong>Encounter #{encounter.encounterId}</strong> for <strong>{encounter.patientName}</strong>? All associated data will be removed.</p>
+        <p style={{ color: '#ef4444', fontSize: '0.8125rem' }}>This action cannot be undone.</p>
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px' }}>
+          <button className="btn btn-secondary" onClick={() => setShowDeleteModal(false)}>Cancel</button>
+          <button className="btn btn-danger" onClick={confirmDelete} disabled={actionLoading}><Trash2 size={16} /> {actionLoading ? 'Deleting...' : 'Delete'}</button>
+        </div>
+      </Modal>
+
+      {/* Delete Prescription Modal */}
+      <Modal isOpen={showDeleteRxModal} onClose={() => { setShowDeleteRxModal(false); setPendingDeleteRxId(null); }} title="Remove Prescription">
+        <p>Remove this prescription? This action cannot be undone.</p>
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px' }}>
+          <button className="btn btn-secondary" onClick={() => { setShowDeleteRxModal(false); setPendingDeleteRxId(null); }}>Cancel</button>
+          <button className="btn btn-danger" onClick={confirmDeleteRx}><Trash2 size={16} /> Remove</button>
+        </div>
+      </Modal>
+
+      {/* Cancel Lab Order Modal */}
+      <Modal isOpen={showCancelLabModal} onClose={() => { setShowCancelLabModal(false); setPendingCancelLabId(null); }} title="Cancel Lab Order">
+        <p>Cancel this lab order? This action cannot be undone.</p>
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px' }}>
+          <button className="btn btn-secondary" onClick={() => { setShowCancelLabModal(false); setPendingCancelLabId(null); }}>Keep Order</button>
+          <button className="btn btn-danger" onClick={confirmCancelLabOrder} disabled={actionLoading}><Trash2 size={16} /> {actionLoading ? 'Cancelling...' : 'Cancel Order'}</button>
+        </div>
+      </Modal>
     </div>
   );
 }

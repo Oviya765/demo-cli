@@ -3,13 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getPrescriptionById, deletePrescription } from '../../services/prescriptionService';
 import type { PrescriptionResponseDto } from '../../models/types';
 import { ArrowLeft, Trash2, Edit, Pill, User, Clock, FileText } from 'lucide-react';
-import { getPatientMrnSync } from '../../services/patientService';
+import { fetchMrnByPatientId } from '../../services/patientService';
 import '../../assets/styles/prescriptions/prescription.css';
 
 export default function PrescriptionDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [rx, setRx] = useState<PrescriptionResponseDto | null>(null);
+  const [patientMrn, setPatientMrn] = useState('—');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,6 +21,8 @@ export default function PrescriptionDetailPage() {
     try {
       const data = await getPrescriptionById(Number(id));
       setRx(data);
+      const mrn = await fetchMrnByPatientId(data.patientId);
+      setPatientMrn(mrn);
     } catch (err) {
       console.error('Failed to load prescription', err);
     } finally {
@@ -47,10 +50,10 @@ export default function PrescriptionDetailPage() {
 
   const getStatusBadge = (status: string) => {
     const map: Record<string, { cls: string; label: string }> = {
-      'ACTIVE': { cls: 'badge-success', label: 'Active' },
-      'COMPLETED': { cls: 'badge-info', label: 'Completed' },
+      'DRAFT': { cls: 'badge-neutral', label: 'Draft' },
+      'ISSUED': { cls: 'badge-success', label: 'Issued' },
+      'DISPENSED': { cls: 'badge-info', label: 'Dispensed' },
       'CANCELLED': { cls: 'badge-danger', label: 'Cancelled' },
-      'EXPIRED': { cls: 'badge-warning', label: 'Expired' },
     };
     const s = map[status] || { cls: 'badge-neutral', label: status };
     return <span className={`badge ${s.cls}`}><span className="badge-dot"></span>{s.label}</span>;
@@ -74,7 +77,7 @@ export default function PrescriptionDetailPage() {
             <ArrowLeft size={20} />
           </button>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
               <h1>Prescription #{rx.rxId}</h1>
               {getStatusBadge(rx.status)}
             </div>
@@ -82,12 +85,16 @@ export default function PrescriptionDetailPage() {
           </div>
         </div>
         <div className="page-header-actions">
-          <button className="btn btn-secondary" onClick={() => navigate(`/prescriptions/${rx.rxId}/edit`)}>
-            <Edit size={16} /> Edit
-          </button>
-          <button className="btn btn-danger" onClick={handleDelete}>
-            <Trash2 size={16} /> Delete
-          </button>
+          {rx.status === 'DRAFT' && (
+            <>
+              <button className="btn btn-secondary" onClick={() => navigate(`/prescriptions/${rx.rxId}/edit`)}>
+                <Edit size={16} /> Edit
+              </button>
+              <button className="btn btn-danger" onClick={handleDelete}>
+                <Trash2 size={16} /> Delete
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -104,7 +111,7 @@ export default function PrescriptionDetailPage() {
             </div>
             <div className="detail-item">
               <label>Patient MRN</label>
-              <p>{getPatientMrnSync(rx.patientId)}</p>
+              <p>{patientMrn}</p>
             </div>
             <div className="detail-item">
               <label>Prescriber</label>

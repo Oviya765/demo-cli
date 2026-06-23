@@ -12,7 +12,7 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
-      const stored = localStorage.getItem('clinic_flow_theme');
+      const stored = sessionStorage.getItem('clinic_flow_theme');
       if (stored === 'dark' || stored === 'light') return stored;
     } catch {}
     
@@ -36,7 +36,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         root.classList.remove('dark-theme');
         root.setAttribute('data-theme', 'light');
       }
-      localStorage.setItem('clinic_flow_theme', theme);
+      sessionStorage.setItem('clinic_flow_theme', theme);
     } catch (e) {
       console.error('Failed to set theme attributes', e);
     }

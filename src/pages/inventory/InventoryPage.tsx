@@ -3,30 +3,72 @@ import { toast } from "react-hot-toast";
 import type { InventoryResponseDto, MedicationResponseDto } from "../../models/types";
 import { 
   getAllInventory, 
-  getLowStock, 
   getExpiringInventory, 
   getExpiredInventory, 
   createInventoryItem, 
+  createMedication,
   adjustStock, 
-  deleteInventoryItem,
-  getAllMedications
+  getAllMedications,
+  deleteInventoryItem
 } from "../../services/inventoryService";
 import { Panel, Table, StatusBadge, Modal } from "../../components/ui/components";
 import "../../assets/styles/inventory/InventoryPage.css";
 
+// Whole days remaining until a batch expires. 0 = expires today, negative = expired.
+function getDaysUntilExpiry(expiryDate: string): number {
+  if (!expiryDate) return 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiry = new Date(expiryDate);
+  expiry.setHours(0, 0, 0, 0);
+  return Math.floor((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// A batch is expired if the backend flags it, or it expires today / in the past.
+function isBatchExpired(item: InventoryResponseDto): boolean {
+  return item.expired || getDaysUntilExpiry(item.expiryDate) <= 0;
+}
+
+// Displays storage locations in aisle terms. Any legacy "Pharmacy Rack" / "Rack" /
+// "Shelf" wording coming from the backend is normalised to an "Aisle ..." label.
+function formatStorageLocation(location?: string | null): string {
+  const raw = (location || "").trim();
+  if (!raw) return "N/A";
+
+  // Already expressed as an aisle.
+  if (/aisle/i.test(raw)) return raw;
+
+  // Pull a trailing identifier (letter or number) if one is present, e.g.
+  // "Pharmacy Rack 3" -> "Aisle 3", "Rack B" -> "Aisle B".
+  const match = raw.match(/(?:pharmacy\s*rack|rack|shelf|bay|bin)\s*[-#]?\s*([A-Za-z0-9]+)/i);
+  if (match) {
+    return `Aisle ${match[1].toUpperCase()}`;
+  }
+
+  // Generic fallback: swap the rack/shelf wording for "Aisle".
+  if (/pharmacy\s*rack|rack|shelf|bay|bin/i.test(raw)) {
+    return raw.replace(/pharmacy\s*rack|rack|shelf|bay|bin/gi, "Aisle");
+  }
+
+  return raw;
+}
+
 export default function InventoryPage() {
-  const [activeTab, setActiveTab] = useState<"all" | "low" | "expiring">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "low" | "out" | "expiring" | "expired">("all");
   const [inventoryList, setInventoryList] = useState<InventoryResponseDto[]>([]);
   const [medications, setMedications] = useState<MedicationResponseDto[]>([]);
-  const [summary, setSummary] = useState<{ total: number; low: number; expired: number; expiring: number }>({
+  const [summary, setSummary] = useState<{ total: number; low: number; outOfStock: number; expired: number; expiring: number }>({
     total: 0,
     low: 0,
+    outOfStock: 0,
     expired: 0,
     expiring: 0
   });
+  const [searchTerm, setSearchTerm] = useState("");
 
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
+  const [showStockForm, setShowStockForm] = useState(false);
+  const [showMedicationForm, setShowMedicationForm] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<InventoryResponseDto | null>(null);
 
@@ -39,6 +81,14 @@ export default function InventoryPage() {
   const [location, setLocation] = useState("");
   const [costPrice, setCostPrice] = useState<number>(0);
 
+  // Form Fields for New Medication
+  const [newMedicationCode, setNewMedicationCode] = useState("");
+  const [newMedicationName, setNewMedicationName] = useState("");
+  const [newMedicationFormulation, setNewMedicationFormulation] = useState("TABLET");
+  const [newMedicationStrength, setNewMedicationStrength] = useState("");
+  const [newMedicationAtcCode, setNewMedicationAtcCode] = useState("");
+  const [newMedicationControlledFlag, setNewMedicationControlledFlag] = useState(false);
+
   // Adjust Form Fields
   const [adjustQty, setAdjustQty] = useState<number>(0);
   const [adjustReason, setAdjustReason] = useState("RESTOCK");
@@ -46,10 +96,9 @@ export default function InventoryPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [allStock, meds, lowList, expiringList, expiredList] = await Promise.all([
+      const [allStock, meds, expiringList, expiredList] = await Promise.all([
         getAllInventory(),
         getAllMedications(),
-        getLowStock(),
         getExpiringInventory(30),
         getExpiredInventory()
       ]);
@@ -59,7 +108,8 @@ export default function InventoryPage() {
       
       setSummary({
         total: allStock.length,
-        low: lowList.length,
+        low: allStock.filter(item => item.status === "LOW_STOCK").length,
+        outOfStock: allStock.filter(item => item.status === "OUT_OF_STOCK").length,
         expired: expiredList.length,
         expiring: expiringList.length
       });
@@ -74,20 +124,56 @@ export default function InventoryPage() {
     loadData();
   }, []);
 
+  const availableMedications = useMemo(() => {
+    return medications;
+  }, [medications]);
+
   const displayedList = useMemo(() => {
     if (activeTab === "low") {
-      return inventoryList.filter(item => item.quantity <= 50 || item.status === "LOW_STOCK" || item.status === "OUT_OF_STOCK");
+      return inventoryList.filter(item => !isBatchExpired(item) && item.status === "LOW_STOCK");
+    }
+    if (activeTab === "out") {
+      return inventoryList.filter(item => !isBatchExpired(item) && item.status === "OUT_OF_STOCK");
     }
     if (activeTab === "expiring") {
-      return inventoryList.filter(item => item.expired || new Date(item.expiryDate) <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+      // Expiring soon = NOT yet expired but within the next 30 days.
+      return inventoryList.filter(
+        item => !isBatchExpired(item) && getDaysUntilExpiry(item.expiryDate) <= 30
+      );
     }
-    return inventoryList;
+    if (activeTab === "expired") {
+      // Dedicated section that all expired batches are moved into.
+      return inventoryList.filter(item => isBatchExpired(item));
+    }
+    // "All Stock" excludes expired batches — they live in the Expired section.
+    return inventoryList.filter(item => !isBatchExpired(item));
   }, [inventoryList, activeTab]);
+
+  const filteredList = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) return displayedList;
+
+    return displayedList.filter((item) =>
+      [item.medicationName, item.medicationCode, item.batchNumber, formatStorageLocation(item.location), item.status]
+        .map((value) => String(value ?? "").toLowerCase())
+        .some((value) => value.includes(query))
+    );
+  }, [displayedList, searchTerm]);
 
   async function handleCreateBatch(e: React.FormEvent) {
     e.preventDefault();
     if (!medicationId || !batchNumber || quantity <= 0 || !expiryDate) {
       toast.error("Please fill in all required fields.");
+      return;
+    }
+
+    // Block stocking any batch whose expiry date is today or in the past.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const selectedExpiry = new Date(expiryDate);
+    selectedExpiry.setHours(0, 0, 0, 0);
+    if (selectedExpiry <= today) {
+      toast.error("Expired medicines can't be stocked. Please enter a valid future expiry date.");
       return;
     }
 
@@ -97,13 +183,13 @@ export default function InventoryPage() {
         batchNumber,
         quantity,
         unit,
-        expiryDate: new Date(expiryDate).toISOString(),
-        location,
-        costPrice
+        expiryDate,
+        location: location || "Aisle A",
+        costPrice: costPrice && costPrice > 0 ? costPrice : 1.00
       });
 
       toast.success("Inventory batch added successfully.");
-      setShowForm(false);
+      setShowStockForm(false);
       
       // Reset Form
       setMedicationId("");
@@ -120,14 +206,63 @@ export default function InventoryPage() {
     }
   }
 
+  async function handleCreateMedication(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newMedicationCode || !newMedicationName || !newMedicationStrength) {
+      toast.error("Please fill in all required medication fields.");
+      return;
+    }
+
+    const normalizedCode = newMedicationCode.trim().toUpperCase();
+    const codeExists = medications.some(
+      (med) => (med.code || "").trim().toUpperCase() === normalizedCode
+    );
+    if (codeExists) {
+      toast.error("Medication code already exists. Please use a different code.");
+      return;
+    }
+
+    try {
+      const createdMedication = await createMedication({
+        code: normalizedCode,
+        name: newMedicationName.trim(),
+        formulation: newMedicationFormulation,
+        strength: newMedicationStrength.trim(),
+        atcCode: newMedicationAtcCode.trim() || null,
+        controlledFlag: newMedicationControlledFlag
+      });
+
+      setMedications((prev) => {
+        if (prev.some((med) => med.medId === createdMedication.medId)) {
+          return prev;
+        }
+        return [...prev, createdMedication];
+      });
+      setMedicationId(String(createdMedication.medId));
+
+      toast.success("Medication created successfully.");
+      setShowMedicationForm(false);
+      setShowStockForm(true);
+      setNewMedicationCode("");
+      setNewMedicationName("");
+      setNewMedicationFormulation("TABLET");
+      setNewMedicationStrength("");
+      setNewMedicationAtcCode("");
+      setNewMedicationControlledFlag(false);
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to create medication.");
+    }
+  }
+
   async function handleAdjustStock(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedItem || adjustQty === 0) return;
 
     try {
       await adjustStock(selectedItem.inventoryId, {
-        quantity: adjustQty,
-        unit: adjustReason // using 'unit' field to pass reason in RequestDto if backend expects it in PharmacyRequestDto
+        quantityDelta: adjustQty,
+        notes: adjustReason // using 'unit' field to pass reason in RequestDto if backend expects it in PharmacyRequestDto
       });
 
       toast.success("Stock level adjusted successfully.");
@@ -140,14 +275,19 @@ export default function InventoryPage() {
     }
   }
 
-  async function handleDeleteItem(id: number) {
-    if (!window.confirm("Are you sure you want to delete this inventory item?")) return;
+  async function handleDeleteStock(item: InventoryResponseDto) {
+    const confirmed = window.confirm(
+      `Delete batch ${item.batchNumber} for ${item.medicationName}? This will permanently remove this stock record.`
+    );
+    if (!confirmed) return;
+
     try {
-      await deleteInventoryItem(id);
-      toast.success("Inventory item deleted.");
+      await deleteInventoryItem(item.inventoryId);
+      setInventoryList((prev) => prev.filter((entry) => entry.inventoryId !== item.inventoryId));
+      toast.success("Stock batch deleted successfully.");
       loadData();
     } catch (err: any) {
-      toast.error(err.message || "Failed to delete item.");
+      toast.error(err.message || "Failed to delete stock batch.");
     }
   }
 
@@ -174,6 +314,10 @@ export default function InventoryPage() {
           <span className="summary-card-label">Low Stock Batches</span>
           <strong className="summary-card-value" style={{ color: "var(--color-warning)" }}>{summary.low}</strong>
         </div>
+        <div className="summary-card alert-warning">
+          <span className="summary-card-label">Out of Stock Alerts</span>
+          <strong className="summary-card-value" style={{ color: "var(--color-warning)" }}>{summary.outOfStock}</strong>
+        </div>
         <div className="summary-card alert-danger">
           <span className="summary-card-label">Expired Batches</span>
           <strong className="summary-card-value" style={{ color: "var(--color-danger)" }}>{summary.expired}</strong>
@@ -187,33 +331,189 @@ export default function InventoryPage() {
       <div className="tabs" style={{ marginBottom: "20px" }}>
         <button className={`tab ${activeTab === "all" ? "active" : ""}`} onClick={() => setActiveTab("all")}>All Stock</button>
         <button className={`tab ${activeTab === "low" ? "active" : ""}`} onClick={() => setActiveTab("low")}>Low Stock Alerts</button>
-        <button className={`tab ${activeTab === "expiring" ? "active" : ""}`} onClick={() => setActiveTab("expiring")}>Expiring / Expired</button>
+        <button className={`tab ${activeTab === "out" ? "active" : ""}`} onClick={() => setActiveTab("out")}>Out of Stock Alerts</button>
+        <button className={`tab ${activeTab === "expiring" ? "active" : ""}`} onClick={() => setActiveTab("expiring")}>Expiring Soon</button>
+        <button className={`tab ${activeTab === "expired" ? "active" : ""}`} onClick={() => setActiveTab("expired")}>Expired Stock</button>
       </div>
 
       <Panel
         title="Stock Ledger"
         actions={
-          <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-            {showForm ? "Cancel" : "+ Add Stock Batch"}
-          </button>
+          <>
+            <input
+              className="form-input"
+              type="text"
+              placeholder="Search inventory..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{ minWidth: "240px" }}
+            />
+            <button className="btn btn-secondary" onClick={() => setShowMedicationForm(!showMedicationForm)}>
+              {showMedicationForm ? "Cancel" : "+ New Medication"}
+            </button>
+            <button className="btn btn-primary" onClick={() => setShowStockForm(!showStockForm)}>
+              {showStockForm ? "Cancel" : "+ Add Stock Batch"}
+            </button>
+          </>
         }
       >
-        {showForm && (
+        {showMedicationForm && (
+          <form onSubmit={handleCreateMedication} style={{ background: "var(--color-bg)", padding: "24px", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", marginBottom: "20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <h3 style={{ fontWeight: 600 }}>New Medication</h3>
+              <button type="button" style={{ background: "none", border: "none", fontSize: "1.5rem", cursor: "pointer", color: "var(--color-text-muted)" }} onClick={() => setShowMedicationForm(false)}>&times;</button>
+            </div>
+
+            <div className="form-row-3">
+              <div className="form-group">
+                <label className="form-label">Medication Code *</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. MED011"
+                  list="medication-code-suggestions"
+                  value={newMedicationCode}
+                  onChange={(e) => setNewMedicationCode(e.target.value)}
+                  required
+                />
+                <datalist id="medication-code-suggestions">
+                  <option value="MED016" />
+                  <option value="MED017" />
+                  <option value="MED018" />
+                  <option value="MED019" />
+                  <option value="MED020" />
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Medication Name *</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. Doxycycline"
+                  list="medication-name-suggestions"
+                  value={newMedicationName}
+                  onChange={(e) => setNewMedicationName(e.target.value)}
+                  required
+                />
+                <datalist id="medication-name-suggestions">
+                  <option value="Doxycycline" />
+                  <option value="Levocetirizine" />
+                  <option value="Montelukast" />
+                  <option value="Losartan" />
+                  <option value="Cefixime" />
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Strength *</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. 100mg"
+                  list="medication-strength-suggestions"
+                  value={newMedicationStrength}
+                  onChange={(e) => setNewMedicationStrength(e.target.value)}
+                  required
+                />
+                <datalist id="medication-strength-suggestions">
+                  <option value="5mg" />
+                  <option value="10mg" />
+                  <option value="20mg" />
+                  <option value="50mg" />
+                  <option value="100mg" />
+                  <option value="250mg" />
+                  <option value="500mg" />
+                </datalist>
+              </div>
+            </div>
+
+            <div className="form-row-3">
+              <div className="form-group">
+                <label className="form-label">Formulation *</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  list="medication-formulation-suggestions"
+                  value={newMedicationFormulation}
+                  onChange={(e) => setNewMedicationFormulation(e.target.value.toUpperCase())}
+                  required
+                />
+                <datalist id="medication-formulation-suggestions">
+                  <option value="TABLET" />
+                  <option value="CAPSULE" />
+                  <option value="SYRUP" />
+                  <option value="VIAL" />
+                  <option value="INJECTION" />
+                  <option value="OINTMENT" />
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">ATC Code</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. J01AA02"
+                  list="medication-atc-suggestions"
+                  value={newMedicationAtcCode}
+                  onChange={(e) => setNewMedicationAtcCode(e.target.value.toUpperCase())}
+                />
+                <datalist id="medication-atc-suggestions">
+                  <option value="J01AA02" />
+                  <option value="R06AE09" />
+                  <option value="R03DC03" />
+                  <option value="C09CA01" />
+                  <option value="J01DD08" />
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Controlled Drug</label>
+                <select
+                  className="form-select"
+                  value={newMedicationControlledFlag ? "YES" : "NO"}
+                  onChange={(e) => setNewMedicationControlledFlag(e.target.value === "YES")}
+                >
+                  <option value="NO">No</option>
+                  <option value="YES">Yes</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ marginTop: "20px", display: "flex", gap: "12px" }}>
+              <button type="submit" className="btn btn-primary">Create Medication</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowMedicationForm(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+
+        {showStockForm && (
           <form onSubmit={handleCreateBatch} style={{ background: "var(--color-bg)", padding: "24px", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", marginBottom: "20px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
               <h3 style={{ fontWeight: 600 }}>Add Stock Batch</h3>
-              <button type="button" style={{ background: "none", border: "none", fontSize: "1.5rem", cursor: "pointer", color: "var(--color-text-muted)" }} onClick={() => setShowForm(false)}>&times;</button>
+              <button type="button" style={{ background: "none", border: "none", fontSize: "1.5rem", cursor: "pointer", color: "var(--color-text-muted)" }} onClick={() => setShowStockForm(false)}>&times;</button>
             </div>
 
             <div className="form-row-3">
               <div className="form-group">
                 <label className="form-label">Select Medication *</label>
-                <select className="form-select" value={medicationId} onChange={(e) => setMedicationId(e.target.value)} required>
+                <select
+                  className="form-select"
+                  value={medicationId}
+                  onChange={(e) => setMedicationId(e.target.value)}
+                  required
+                >
                   <option value="">-- Select Medication --</option>
-                  {medications.map(med => (
+                  {availableMedications.map(med => (
                     <option key={med.medId} value={med.medId}>{med.name} ({med.code})</option>
                   ))}
                 </select>
+                {availableMedications.length === 0 && (
+                  <div style={{ color: "var(--color-warning)", fontSize: "12px", marginTop: "6px" }}>
+                    No medicines available. Create a new one.
+                  </div>
+                )}
               </div>
 
               <div className="form-group">
@@ -241,12 +541,27 @@ export default function InventoryPage() {
 
               <div className="form-group">
                 <label className="form-label">Expiry Date *</label>
-                <input className="form-input" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} required />
+                <input className="form-input" type="date" min={new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split("T")[0]} value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} required />
               </div>
 
               <div className="form-group">
-                <label className="form-label">Storage Location</label>
-                <input className="form-input" type="text" placeholder="e.g. Aisle B, Shelf 4" value={location} onChange={(e) => setLocation(e.target.value)} />
+                <label className="form-label">Storage Location (Aisle)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. Aisle A, Shelf 4"
+                  list="storage-aisle-suggestions"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                />
+                <datalist id="storage-aisle-suggestions">
+                  <option value="Aisle A" />
+                  <option value="Aisle B" />
+                  <option value="Aisle C" />
+                  <option value="Aisle D" />
+                  <option value="Aisle E" />
+                  <option value="Aisle F" />
+                </datalist>
               </div>
             </div>
 
@@ -259,14 +574,14 @@ export default function InventoryPage() {
 
             <div style={{ marginTop: "20px", display: "flex", gap: "12px" }}>
               <button type="submit" className="btn btn-primary">Add Batch</button>
-              <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowStockForm(false)}>Cancel</button>
             </div>
           </form>
         )}
 
         <Table
           columns={["Medication", "Batch Code", "Current Qty", "Unit", "Storage Location", "Expiry", "Status", "Actions"]}
-          rows={displayedList.map(item => [
+          rows={filteredList.map(item => [
             <div key={item.inventoryId}>
               <strong className="cell-main">{item.medicationName}</strong>
               <span className="cell-sub" style={{ display: "block" }}>Code: {item.medicationCode}</span>
@@ -274,18 +589,38 @@ export default function InventoryPage() {
             item.batchNumber,
             <strong>{item.quantity}</strong>,
             item.unit,
-            item.location || "N/A",
-            <span key={`expiry-${item.inventoryId}`} style={{ color: item.expired ? "var(--color-danger)" : "inherit" }}>
+            formatStorageLocation(item.location),
+            <span key={`expiry-${item.inventoryId}`} style={{ color: isBatchExpired(item) ? "var(--color-danger)" : "inherit" }}>
               {new Date(item.expiryDate).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })}
-              {item.expired && " (EXPIRED)"}
+              {isBatchExpired(item) && " (EXPIRED)"}
             </span>,
             <StatusBadge key={`badge-${item.inventoryId}`} status={item.status} />,
             <div className="actions-cell" key={`actions-${item.inventoryId}`}>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setSelectedItem(item); setShowAdjustModal(true); }}>
-                Adjust Qty
-              </button>
-              <button className="btn btn-danger btn-sm" onClick={() => handleDeleteItem(item.inventoryId)}>
-                Delete
+              {!isBatchExpired(item) && (
+                <button
+                  className="btn btn-secondary btn-sm btn-icon"
+                  title="Adjust quantity"
+                  aria-label="Adjust quantity"
+                  onClick={() => { setSelectedItem(item); setShowAdjustModal(true); }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                  </svg>
+                </button>
+              )}
+              <button
+                className="btn btn-danger btn-sm btn-icon"
+                title="Delete batch"
+                aria-label="Delete batch"
+                onClick={() => handleDeleteStock(item)}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
               </button>
             </div>
           ])}

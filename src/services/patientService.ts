@@ -1,91 +1,6 @@
 import api from './api';
 import type { PatientResponseDto, PatientRequestDto } from '../models/types';
 
-const LEGACY_PATIENT_CACHE_KEY = 'clinic_flow_patient';
-
-interface StoredAuthIdentity {
-  userId?: number;
-  email?: string;
-}
-
-function getStoredAuthIdentity(): StoredAuthIdentity | null {
-  try {
-    const raw = localStorage.getItem('clinic_flow_user');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredAuthIdentity;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function getPatientCacheKey(identity?: StoredAuthIdentity | null): string {
-  if (identity?.userId != null) {
-    return `clinic_flow_patient_user_${identity.userId}`;
-  }
-  if (identity?.email) {
-    return `clinic_flow_patient_email_${identity.email.toLowerCase()}`;
-  }
-  return LEGACY_PATIENT_CACHE_KEY;
-}
-
-function extractEmailFromContact(contactInfoJson?: string): string {
-  if (!contactInfoJson) return '';
-  try {
-    const parsed = JSON.parse(contactInfoJson) as { email?: string };
-    return (parsed.email || '').toLowerCase().trim();
-  } catch {
-    return '';
-  }
-}
-
-export function getCachedPatientProfile(): PatientResponseDto | null {
-  try {
-    const identity = getStoredAuthIdentity();
-    const scopedKey = getPatientCacheKey(identity);
-    const scopedRaw = localStorage.getItem(scopedKey);
-    if (scopedRaw) {
-      return JSON.parse(scopedRaw) as PatientResponseDto;
-    }
-
-    const legacyRaw = localStorage.getItem(LEGACY_PATIENT_CACHE_KEY);
-    if (legacyRaw) {
-      const legacyProfile = JSON.parse(legacyRaw) as PatientResponseDto;
-
-      // Prevent cross-user leakage from old shared cache key.
-      if (identity?.email) {
-        const legacyEmail = extractEmailFromContact(legacyProfile.contactInfoJson);
-        if (legacyEmail && legacyEmail === identity.email.toLowerCase().trim()) {
-          // Migrate matching legacy cache into scoped key for future reads.
-          localStorage.setItem(scopedKey, legacyRaw);
-          return legacyProfile;
-        }
-        return null;
-      }
-
-      return legacyProfile;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-export function cachePatientProfile(profile: PatientResponseDto): void {
-  try {
-    const identity = getStoredAuthIdentity();
-    const scopedKey = getPatientCacheKey(identity);
-    localStorage.setItem(scopedKey, JSON.stringify(profile));
-
-    // Keep legacy cache only when identity is unavailable (backward compatibility).
-    if (!identity?.userId && !identity?.email) {
-      localStorage.setItem(LEGACY_PATIENT_CACHE_KEY, JSON.stringify(profile));
-    }
-  } catch {
-    // no-op (storage may be unavailable)
-  }
-}
-
 /**
  * GET /api/v1/patients
  */
@@ -129,14 +44,8 @@ export async function getPatientByMrn(mrn: string): Promise<PatientResponseDto> 
 export async function getMyProfile(): Promise<PatientResponseDto | null> {
   try {
     const response = await api.get<PatientResponseDto>('/api/v1/patients/me');
-    cachePatientProfile(response.data);
     return response.data;
   } catch (err: any) {
-    const cached = getCachedPatientProfile();
-    if (cached && cached.status === 'ACTIVE') {
-      return cached;
-    }
-
     if ([403, 404].includes(err?.response?.status)) {
       return null;
     }
@@ -152,7 +61,6 @@ export async function getMyProfile(): Promise<PatientResponseDto | null> {
 export async function registerPatient(request: PatientRequestDto): Promise<PatientResponseDto> {
   try {
     const response = await api.post<PatientResponseDto>('/api/v1/patients', request);
-    cachePatientProfile(response.data);
     return response.data;
   } catch (err: any) {
     // Rethrow the original error (axios error) so callers can inspect `err.response` for details
@@ -166,7 +74,6 @@ export async function registerPatient(request: PatientRequestDto): Promise<Patie
 export async function updatePatient(id: number, request: PatientRequestDto): Promise<PatientResponseDto> {
   try {
     const response = await api.put<PatientResponseDto>(`/api/v1/patients/${id}`, request);
-    cachePatientProfile(response.data);
     return response.data;
   } catch (err: any) {
     throw new Error(err.response?.data?.message || 'Failed to update patient profile');
@@ -188,14 +95,6 @@ export async function searchPatients(query: string): Promise<PatientResponseDto[
     console.error('Search patients failed, falling back to empty list', e);
     return [];
   }
-}
-
-/**
- * Helper to get Patient MRN synchronously by patientId.
- * Used for listing overlays where MRN needs to be printed inline.
- */
-export function getPatientMrnSync(patientId: number): string {
-  return `MRN-${patientId}`;
 }
 
 export async function fetchMrnByPatientId(patientId: number): Promise<string> {

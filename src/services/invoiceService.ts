@@ -1,5 +1,17 @@
 import api from './api';
-import type { InvoiceResponseDto } from '../models/types';
+import type { InvoiceResponseDto, ServiceItemResponseDto } from '../models/types';
+
+/**
+ * GET /api/v1/finance/service-items
+ */
+export async function getServiceItems(): Promise<ServiceItemResponseDto[]> {
+  try {
+    const response = await api.get<ServiceItemResponseDto[]>('/api/v1/finance/service-items');
+    return response.data;
+  } catch (err: any) {
+    throw new Error(err.response?.data?.message || 'Failed to fetch service items');
+  }
+}
 
 /**
  * GET /api/v1/finance/invoices

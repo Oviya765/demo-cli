@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { createEncounter } from '../../services/encounterService';
-import { searchPatients } from '../../services/patientService';
+import { useState, useEffect, type FormEvent } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { createEncounter, getEncounterById, updateEncounter } from '../../services/encounterService';
+import { searchPatients, getPatientById } from '../../services/patientService';
+import { getAllAppointments } from '../../services/appointmentService';
 import type { PatientResponseDto } from '../../models/types';
 import { useAuth } from '../../contexts/AuthContext';
+import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   Check,
@@ -60,9 +62,14 @@ const SUGGESTION_TAGS = [
 
 export default function EncounterFormPage() {
   const navigate = useNavigate();
+  const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const linkedApptId = Number(searchParams.get('apptId')) || NaN;
+  const linkedMrn = searchParams.get('mrn') || '';
   const { user } = useAuth();
+  const isEditMode = Boolean(id);
   const [loading, setLoading] = useState(false);
-  const [requestLabOrder, setRequestLabOrder] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(false);
 
   const [patientMrn, setPatientMrn] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<PatientResponseDto | null>(null);
@@ -72,6 +79,74 @@ export default function EncounterFormPage() {
 
   const [visitType, setVisitType] = useState('Consultation');
   const [chiefComplaint, setChiefComplaint] = useState('');
+
+  // Auto-fill patient and visit type when coming from an appointment
+  useEffect(() => {
+    if (!isEditMode && linkedMrn) {
+      prefillFromAppointment();
+    }
+  }, [linkedMrn]);
+
+  const prefillFromAppointment = async () => {
+    setInitialLoading(true);
+    try {
+      // Search patient by MRN and auto-select
+      const results = await searchPatients(linkedMrn);
+      const exact = results.find(p => p.mrn.toLowerCase() === linkedMrn.toLowerCase());
+      if (exact) {
+        setSelectedPatient(exact);
+        setPatientMrn(exact.mrn);
+      }
+
+      // Fetch appointment to get serviceType and map to visit type
+      if (!Number.isNaN(linkedApptId) && linkedApptId > 0) {
+        const allAppts = await getAllAppointments();
+        const appt = allAppts.find(a => a.apptId === linkedApptId);
+        if (appt?.serviceType) {
+          // Map appointment serviceType to encounter visit type
+          const typeMap: Record<string, string> = {
+            'Consultation': 'Consultation',
+            'Follow Up': 'Follow-Up',
+            'Follow-Up': 'Follow-Up',
+            'Routine Check': 'Routine Check',
+            'Emergency': 'Emergency',
+          };
+          setVisitType(typeMap[appt.serviceType] || appt.serviceType);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to prefill from appointment', err);
+    } finally {
+      setInitialLoading(false);
+    }
+  };
+
+  // Load existing encounter data in edit mode
+  useEffect(() => {
+    if (isEditMode && id) {
+      loadEncounterForEdit(Number(id));
+    }
+  }, [id]);
+
+  const loadEncounterForEdit = async (encounterId: number) => {
+    setInitialLoading(true);
+    try {
+      const encData = await getEncounterById(encounterId);
+      setVisitType(encData.visitType);
+      setChiefComplaint(encData.chiefComplaint);
+
+      // Load the patient associated with this encounter
+      const patData = await getPatientById(encData.patientId);
+      setSelectedPatient(patData);
+      setPatientMrn(patData.mrn);
+    } catch (err) {
+      console.error('Failed to load encounter for editing', err);
+      toast.error('Failed to load encounter data.');
+      navigate('/encounters');
+    } finally {
+      setInitialLoading(false);
+    }
+  };
 
   const handlePatientSearch = async (val: string) => {
     setPatientMrn(val);
@@ -109,27 +184,40 @@ export default function EncounterFormPage() {
     setLoading(true);
 
     try {
-      const newEnc = await createEncounter({
-        patientId: selectedPatient.patientId,
-        visitType,
-        chiefComplaint,
-        vitalsJson: JSON.stringify({ bp: '', temp: '', pulse: '', spo2: '', weight: '' }),
-        notesJson: JSON.stringify({ subjective: '', objective: '', assessment: '', plan: '' }),
-        diagnosesJson: '[]',
-        ordersJson: '[]',
-      });
-      if (requestLabOrder) {
-        navigate('/lab/new', {
-          state: {
-            encounterId: newEnc.encounterId,
-            patientId: selectedPatient.patientId
-          }
+      if (isEditMode && id) {
+        // Edit mode: update existing encounter
+        const existingEnc = await getEncounterById(Number(id));
+        const updatedEnc = await updateEncounter(Number(id), {
+          patientId: selectedPatient.patientId,
+          visitType,
+          chiefComplaint,
+          vitalsJson: existingEnc.vitalsJson,
+          notesJson: existingEnc.notesJson,
+          diagnosesJson: existingEnc.diagnosesJson,
+          ordersJson: existingEnc.ordersJson,
+          status: existingEnc.status,
         });
+        toast.success('Encounter updated successfully!');
+        navigate(`/encounters/${updatedEnc.encounterId}`);
       } else {
-        navigate(`/encounters/${newEnc.encounterId}`);
+        // Create mode: create new encounter
+        const newEnc = await createEncounter({
+          patientId: selectedPatient.patientId,
+          visitType,
+          chiefComplaint,
+          vitalsJson: JSON.stringify({ bp: '', temp: '', pulse: '', spo2: '', weight: '' }),
+          notesJson: JSON.stringify({ subjective: '', objective: '', assessment: '', plan: '' }),
+          diagnosesJson: '[]',
+          ordersJson: '[]',
+          appointmentId: !Number.isNaN(linkedApptId) && linkedApptId > 0 ? linkedApptId : undefined,
+        });
+        toast.success('Encounter created successfully!');
+        const linkSuffix = !Number.isNaN(linkedApptId) && linkedApptId > 0 ? `?apptId=${linkedApptId}` : '';
+        navigate(`/encounters/${newEnc.encounterId}${linkSuffix}`);
       }
     } catch (err) {
-      console.error('Failed to create encounter', err);
+      console.error('Failed to save encounter', err);
+      toast.error(isEditMode ? 'Failed to update encounter.' : 'Failed to create encounter.');
     } finally {
       setLoading(false);
     }
@@ -138,17 +226,21 @@ export default function EncounterFormPage() {
   const selectedTypeObj = ENCOUNTER_TYPES.find(t => t.type === visitType) || ENCOUNTER_TYPES[0];
   const TypeIcon = selectedTypeObj.icon;
 
+  if (initialLoading) {
+    return <div className="page-spinner"><div className="spinner"></div></div>;
+  }
+
   return (
     <div>
       {/* Header */}
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button type="button" className="btn btn-ghost btn-icon" onClick={() => navigate('/encounters')}>
+          <button type="button" className="btn btn-ghost btn-icon" onClick={() => isEditMode ? navigate(`/encounters/${id}`) : navigate('/encounters')}>
             <ArrowLeft size={20} />
           </button>
           <div>
-            <h1>Open New Encounter</h1>
-            <p>Create a dynamic step-by-step patient encounter</p>
+            <h1>{isEditMode ? 'Edit Encounter' : 'Open New Encounter'}</h1>
+            <p>{isEditMode ? 'Update encounter details' : 'Create a dynamic step-by-step patient encounter'}</p>
           </div>
         </div>
       </div>
@@ -271,7 +363,7 @@ export default function EncounterFormPage() {
                     {user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'DR'}
                   </div>
                   <div className="physician-info">
-                    <div className="physician-name">Dr. {user?.name || 'Attending Physician'}</div>
+                    <div className="physician-name">{user?.name || 'Attending Physician'}</div>
                     <div className="physician-role-email">{user?.role || 'CLINICIAN'} | {user?.email || 'N/A'}</div>
                   </div>
                   <div className="physician-badge">
@@ -318,32 +410,18 @@ export default function EncounterFormPage() {
                       </button>
                     ))}
                   </div>
-                  <div style={{ marginTop: '20px', borderTop: '1px solid var(--color-border)', paddingTop: '16px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={requestLabOrder}
-                        onChange={e => setRequestLabOrder(e.target.checked)}
-                        style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--color-primary)' }}
-                      />
-                      <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>Request Laboratory Order</span>
-                    </label>
-                    <p style={{ margin: '4px 0 0 24px', fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
-                      Check this to automatically open the Lab Order form after creating the encounter.
-                    </p>
-                  </div>
                 </div>
               </div>
             </div>
 
             {/* Action Buttons */}
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => navigate('/encounters')}>
+              <button type="button" className="btn btn-secondary" onClick={() => isEditMode ? navigate(`/encounters/${id}`) : navigate('/encounters')}>
                 Cancel
               </button>
               <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>
                 <Sparkles size={18} />
-                {loading ? 'Creating...' : 'Open Encounter'}
+                {loading ? (isEditMode ? 'Updating...' : 'Creating...') : (isEditMode ? 'Update Encounter' : 'Open Encounter')}
               </button>
             </div>
 
@@ -378,7 +456,7 @@ export default function EncounterFormPage() {
                 <div className="encounter-preview-item">
                   <div className="encounter-preview-label">Clinician</div>
                   <div className="encounter-preview-val">
-                    Dr. {user?.name || 'Clinician'}
+                    {user?.name || 'Clinician'}
                   </div>
                 </div>
 

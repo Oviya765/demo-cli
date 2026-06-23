@@ -2,33 +2,26 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import '../../assets/styles/dashboard/DashboardPage.css';
-import { getMyProfile, registerPatient, getAllPatients, getCachedPatientProfile, cachePatientProfile } from '../../services/patientService';
+import { getMyProfile, registerPatient, getAllPatients } from '../../services/patientService';
 import { getCurrentUserProfile } from '../../services/authService';
 import { 
   getAllAppointments, 
   getAppointmentsByPatient, 
-  checkInAppointment, 
   cancelAppointment, 
   getClinicians, 
   type Clinician 
 } from '../../services/appointmentService';
-import { getAllUsers } from '../../services/adminUserService';
-import { getAllOrders } from '../../services/labService';
-import { getAllEncounters } from '../../services/encounterService';
-import { getAllPrescriptions } from '../../services/prescriptionService';
-import { getAllPayments } from '../../services/paymentService';
-import type { 
-  PatientResponseDto, 
-  AppointmentResponseDto,
-  UserResponseDto,
-  LabOrderResponseDto,
-  EncounterResponseDto,
-  PrescriptionResponseDto,
-  PaymentResponseDto
-} from '../../models/types';
+import type { PatientResponseDto, AppointmentResponseDto } from '../../models/types';
 import { toast } from 'react-hot-toast';
+import { parseApiError } from '../../utils/validation';
 import PatientDashboardLayout from '../patients/PatientDashboardLayout';
 import ReceptionDashboardLayout from '../patients/ReceptionDashboardLayout';
+import AdminDashboard from './AdminDashboard';
+import ClinicianDashboard from './ClinicianDashboard';
+import PharmacistDashboard from './PharmacistDashboard';
+import LabTechDashboard from './LabTechDashboard';
+import FinanceDashboard from './FinanceDashboard';
+import PatientRoleDashboard from './PatientRoleDashboard';
 import {
   Users,
   CalendarDays,
@@ -37,12 +30,6 @@ import {
   Clock,
   AlertCircle,
   Plus,
-  Activity,
-  FlaskConical,
-  DollarSign,
-  UserCheck,
-  TrendingUp,
-  BarChart3,
 } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -54,15 +41,9 @@ export default function DashboardPage() {
   const [appointments, setAppointments] = useState<AppointmentResponseDto[]>([]);
   const [patientsList, setPatientsList] = useState<PatientResponseDto[]>([]);
   const [clinicians, setClinicians] = useState<Clinician[]>([]);
-  const [usersList, setUsersList] = useState<UserResponseDto[]>([]);
-  const [labOrdersList, setLabOrdersList] = useState<LabOrderResponseDto[]>([]);
-  const [encountersList, setEncountersList] = useState<EncounterResponseDto[]>([]);
-  const [prescriptionsList, setPrescriptionsList] = useState<PrescriptionResponseDto[]>([]);
-  const [paymentsList, setPaymentsList] = useState<PaymentResponseDto[]>([]);
   const [loading, setLoading] = useState(true);
 
   // ── Search & Filter State ──
-  const [patientSearch, setPatientSearch] = useState('');
   const [appointmentSearch, setAppointmentSearch] = useState('');
 
   // ── Modals State ──
@@ -89,13 +70,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (isLoading) return; // wait for auth restoration
-
-    const cached = getCachedPatientProfile();
-    if (cached?.patientId) {
-      setProfile(cached);
-      loadDashboardData(cached);
-      return;
-    }
 
     loadDashboardData();
   }, [user, isLoading]);
@@ -172,12 +146,12 @@ export default function DashboardPage() {
     }
   }, [showAddPatientModal]);
 
-  const loadDashboardData = async (cachedProfile?: PatientResponseDto | null) => {
+  const loadDashboardData = async () => {
     if (!user) return;
     setLoading(true);
     try {
       if (user.role === 'PATIENT') {
-        const effectiveProfile = cachedProfile || profile;
+        const effectiveProfile = profile;
         // Ensure we have clinicians locally to map clinician names
         try {
           if (clinicians.length === 0) {
@@ -206,71 +180,32 @@ export default function DashboardPage() {
               return a;
             });
           } catch {}
-          try {
-            const cachedAppt = localStorage.getItem('clinic_flow_new_appointment');
-            if (cachedAppt) {
-              const a = JSON.parse(cachedAppt);
-              if (a && a.patientId === effectiveProfile.patientId && !appts.find(x => x.apptId === a.apptId)) {
-                appts = [a, ...appts];
-                // clear cached appointment after merging to avoid duplicates next load
-                try { localStorage.removeItem('clinic_flow_new_appointment'); } catch {}
-              }
-            }
-          } catch {}
           setAppointments(appts);
         } else {
           const patientProfile = await getMyProfile();
           if (patientProfile) {
             setProfile(patientProfile);
-            let appts = await getAppointmentsByPatient(patientProfile.patientId);
-            try {
-              const cachedAppt = localStorage.getItem('clinic_flow_new_appointment');
-              if (cachedAppt) {
-                const a = JSON.parse(cachedAppt);
-                if (a && a.patientId === patientProfile.patientId && !appts.find(x => x.apptId === a.apptId)) {
-                  appts = [a, ...appts];
-                  try { localStorage.removeItem('clinic_flow_new_appointment'); } catch {}
-                }
-              }
-            } catch {}
+            const appts = await getAppointmentsByPatient(patientProfile.patientId);
             setAppointments(appts);
           } else {
             setProfile(null);
             setAppointments([]);
           }
         }
-        const docs = await getClinicians();
-        setClinicians(docs);
+        try {
+          const docs = await getClinicians();
+          setClinicians(docs);
+        } catch (err) {
+          console.warn('Unable to refresh clinicians list for dashboard', err);
+        }
       } else if (user.role === 'RECEPTION') {
         const patients = await getAllPatients();
         setPatientsList(patients);
         const appts = await getAllAppointments();
         setAppointments(appts);
-      } else if (user.role === 'ADMIN') {
-        const [appts, patients, users, labs, encounters, prescriptions, payments, docs] = await Promise.all([
-          getAllAppointments().catch(() => []),
-          getAllPatients().catch(() => []),
-          getAllUsers().catch(() => []),
-          getAllOrders().catch(() => []),
-          getAllEncounters().catch(() => []),
-          getAllPrescriptions().catch(() => []),
-          getAllPayments().catch(() => []),
-          getClinicians().catch(() => [])
-        ]);
-        setAppointments(appts);
-        setPatientsList(patients);
-        setUsersList(users);
-        setLabOrdersList(labs);
-        setEncountersList(encounters);
-        setPrescriptionsList(prescriptions);
-        setPaymentsList(payments);
-        setClinicians(docs);
       } else {
-        // Clinicians / Other
-        const appts = await getAllAppointments();
-        setAppointments(appts);
-        const patients = await getAllPatients();
-        setPatientsList(patients);
+        // Roles with dedicated dashboards handle their own data loading
+        // Skip fetching here to avoid Access Denied errors
       }
     } catch (err: any) {
       console.error('Failed to load dashboard data', err);
@@ -304,6 +239,15 @@ export default function DashboardPage() {
       return;
     }
 
+    // Date of birth must be a past date (backend @Past)
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (dob >= todayStr) {
+      toast.error('Date of birth must be a past date');
+      setRegError('Date of birth must be a past date');
+      setActionLoading(false);
+      return;
+    }
+
     // Phone format must match backend: digits, +, (), - and spaces; length 7-20
     const phonePattern = /^[0-9+()\-\s]{7,20}$/;
     const normalizedPhone = (accountPhone || phone || user.phone || '').trim().replace(/\s+/g, ' ');
@@ -325,7 +269,7 @@ export default function DashboardPage() {
     try {
       const contactInfoJson = JSON.stringify({ email: user.email || '', phone: normalizedPhone });
       const addressJson = JSON.stringify({ line1: street.trim(), city: city.trim(), state: stateCode.trim(), zip: zip.trim() });
-      const primaryContact = normalizedPhone;
+      const primaryContact = normalizedEmergency;
       const dobIso = normalizeDob(dob);
       const genderValue = (gender || '').toString().toUpperCase();
 
@@ -342,33 +286,13 @@ export default function DashboardPage() {
 
       toast.success('Patient registry completed successfully!');
       setProfile(newProfile);
-      cachePatientProfile(newProfile);
       setShowRegisterModal(false);
       // Keep the returned profile in state and avoid reloading dashboard immediately.
       // This prevents the registration modal from reappearing if the auth token
       // hasn't changed immediately on the backend.
     } catch (err: any) {
-      const resp = err?.response?.data;
-      let msg = '';
-      if (resp) {
-        if (Array.isArray(resp.fieldErrors) && resp.fieldErrors.length > 0) {
-          msg = resp.fieldErrors.map((f: any) => `${f.field || f.defaultMessage || f}: ${f.defaultMessage || f.message || JSON.stringify(f)}`).join('\n');
-        } else if (Array.isArray(resp.errors) && resp.errors.length > 0) {
-          msg = resp.errors.map((f: any) => (f.field ? `${f.field}: ${f.defaultMessage || f.message}` : (f.defaultMessage || f.message || JSON.stringify(f)) )).join('\n');
-        } else if (resp.message) {
-          msg = resp.message;
-        } else {
-          msg = JSON.stringify(resp);
-        }
-      } else {
-        msg = err?.message || 'Registration failed.';
-      }
-      // also include raw response for debugging
-      try {
-        setRegError(msg + '\n\n' + JSON.stringify(err?.response?.data, null, 2));
-      } catch {
-        setRegError(msg);
-      }
+      const msg = parseApiError(err, 'Registration failed.');
+      setRegError(msg);
       console.error('Self registration failed', err);
       toast.error(msg.split('\n')[0]);
     } finally {
@@ -398,6 +322,15 @@ export default function DashboardPage() {
       return;
     }
 
+    // Date of birth must be a past date (backend @Past)
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (dob >= todayStr) {
+      toast.error('Date of birth must be a past date');
+      setRegError('Date of birth must be a past date');
+      setActionLoading(false);
+      return;
+    }
+
     const phonePattern = /^[0-9+()\-\s]{7,20}$/;
     const normalizedPhone = phone.trim().replace(/\s+/g, ' ');
     const normalizedEmergency = emergencyPhone.trim().replace(/\s+/g, ' ');
@@ -418,7 +351,7 @@ export default function DashboardPage() {
     try {
       const contactInfoJson = JSON.stringify({ email: regEmail.trim() || '', phone: normalizedPhone });
       const addressJson = JSON.stringify({ line1: street.trim(), city: city.trim(), state: stateCode.trim(), zip: zip.trim() });
-      const primaryContact = normalizedPhone;
+      const primaryContact = normalizedEmergency;
       const dobIso = normalizeDob(dob);
       const genderValue = (gender || '').toString().toUpperCase();
 
@@ -449,26 +382,12 @@ export default function DashboardPage() {
       setInsuranceId('');
       loadDashboardData();
     } catch (err: any) {
-      // show raw server response when available
-      const resp = err?.response?.data;
-      let raw = err?.message || 'Failed to register patient';
-      try {
-        raw = JSON.stringify(resp, null, 2) || raw;
-      } catch {}
-      setRegError(raw);
-      toast.error((err?.message) || 'Failed to register patient');
+      const msg = parseApiError(err, 'Failed to register patient');
+      setRegError(msg);
+      console.error('Receptionist registration failed', err);
+      toast.error(msg.split('\n')[0]);
     } finally {
       setActionLoading(false);
-    }
-  };
-
-  const handleCheckIn = async (id: number) => {
-    try {
-      await checkInAppointment(id);
-      toast.success('Patient checked in successfully!');
-      loadDashboardData();
-    } catch (err: any) {
-      toast.error(err.message || 'Check-in failed');
     }
   };
 
@@ -532,6 +451,11 @@ export default function DashboardPage() {
   // 1. PATIENT DASHBOARD LAYOUT
   // ─────────────────────────────────────────────────────────────────────────
   if (user?.role === 'PATIENT') {
+    // If patient is registered, show role-based dashboard
+    if (profile) {
+      return <PatientRoleDashboard profile={profile} appointments={appointments} />;
+    }
+    // If not registered, show registration flow
     return (
       <PatientDashboardLayout
         userName={user.name}
@@ -585,8 +509,6 @@ export default function DashboardPage() {
       <ReceptionDashboardLayout
         patientsList={patientsList}
         appointments={appointments}
-        patientSearch={patientSearch}
-        setPatientSearch={setPatientSearch}
         appointmentSearch={appointmentSearch}
         setAppointmentSearch={setAppointmentSearch}
         showAddPatientModal={showAddPatientModal}
@@ -617,490 +539,38 @@ export default function DashboardPage() {
         setInsuranceId={setInsuranceId}
         actionLoading={actionLoading}
         navigateToNewAppointment={() => navigate('/appointments/new')}
+        navigateToInvoices={() => navigate('/invoices')}
+        navigateToPatients={() => navigate('/patients')}
         handleReceptionistRegisterSubmit={handleReceptionistRegisterSubmit}
-        handleCheckIn={handleCheckIn}
-        handleCancelAppt={handleCancelAppt}
         getStatusBadge={getStatusBadge}
-        formatDate={formatDate}
         formatTime={formatTime}
-        parseContact={parseContact}
       />
     );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 3. ADMIN DASHBOARD LAYOUT
+  // 3. ROLE-BASED DASHBOARD ROUTING
   // ─────────────────────────────────────────────────────────────────────────
   if (user?.role === 'ADMIN') {
-    const isSameDay = (d1: Date, d2: Date) => {
-      return d1.getFullYear() === d2.getFullYear() &&
-             d1.getMonth() === d2.getMonth() &&
-             d1.getDate() === d2.getDate();
-    };
-
-    const isThisMonth = (d: Date) => {
-      const now = new Date();
-      return d.getFullYear() === now.getFullYear() &&
-             d.getMonth() === now.getMonth();
-    };
-
-    const isThisWeek = (d: Date) => {
-      const now = new Date();
-      const oneWeekAgo = new Date();
-      oneWeekAgo.setDate(now.getDate() - 7);
-      return d >= oneWeekAgo && d <= now;
-    };
-
-    // ── Metric Computations ──
-    const safePatients = patientsList || [];
-    const safeClinicians = clinicians || [];
-    const safeUsers = usersList || [];
-    const safeAppointments = appointments || [];
-    const safeEncounters = encountersList || [];
-    const safePrescriptions = prescriptionsList || [];
-    const safeLabOrders = labOrdersList || [];
-    const safePayments = paymentsList || [];
-
-    const totalPatients = safePatients.length;
-    const totalDoctors = safeClinicians.length;
-    const totalStaff = safeUsers.filter(u => u.role !== 'PATIENT' && u.role !== 'CLINICIAN').length;
-    const todayAppts = safeAppointments.filter(a => a.startAt && isSameDay(new Date(a.startAt), new Date())).length;
-    const activeAdmissions = safeEncounters.filter(e => e.status === 'IN_PROGRESS').length;
-    const pendingRx = safePrescriptions.filter(p => p.status === 'ACTIVE' || p.status === 'ISSUED' || p.status === 'DRAFT').length;
-    const pendingLabs = safeLabOrders.filter(l => l.status === 'ORDERED' || l.status === 'COLLECTED').length;
-    const todayRevenue = safePayments
-      .filter(p => p.paidAt && isSameDay(new Date(p.paidAt), new Date()))
-      .reduce((sum, p) => sum + p.amount, 0);
-
-    // ── Hospital Overview ──
-    const patientsThisMonth = safePatients.filter(p => p.createdAt && isThisMonth(new Date(p.createdAt))).length;
-    const apptsThisMonth = safeAppointments.filter(a => a.startAt && isThisMonth(new Date(a.startAt))).length;
-    const revenueThisMonth = safePayments
-      .filter(p => p.paidAt && isThisMonth(new Date(p.paidAt)))
-      .reduce((sum, p) => sum + p.amount, 0);
-    const newPatientsThisWeek = safePatients.filter(p => p.createdAt && isThisWeek(new Date(p.createdAt))).length;
-
-    // ── Charts Calculations ──
-    const getLast7Days = () => {
-      const list = [];
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        list.push(d);
-      }
-      return list;
-    };
-
-    const dailyAppts = getLast7Days().map(day => {
-      const count = safeAppointments.filter(a => a.startAt && isSameDay(new Date(a.startAt), day)).length;
-      const label = day.toLocaleDateString('en-IN', { weekday: 'short' });
-      return { label, count };
-    });
-
-    const getLast6Months = () => {
-      const list = [];
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
-        list.push(d);
-      }
-      return list;
-    };
-
-    const monthlyRevenue = getLast6Months().map(m => {
-      const total = safePayments
-        .filter(p => {
-          if (!p.paidAt) return false;
-          const pd = new Date(p.paidAt);
-          return pd.getFullYear() === m.getFullYear() && pd.getMonth() === m.getMonth();
-        })
-        .reduce((sum, p) => sum + p.amount, 0);
-      const label = m.toLocaleDateString('en-IN', { month: 'short' });
-      return { label, total };
-    });
-
-    const monthlyPatients = getLast6Months().map(m => {
-      const count = safePatients.filter(p => {
-        if (!p.createdAt) return false;
-        const cd = new Date(p.createdAt);
-        return cd.getFullYear() === m.getFullYear() && cd.getMonth() === m.getMonth();
-      }).length;
-      const label = m.toLocaleDateString('en-IN', { month: 'short' });
-      return { label, count };
-    });
-
-    const maxAppts = Math.max(...dailyAppts.map(d => d.count), 5);
-    const maxRevenue = Math.max(...monthlyRevenue.map(m => m.total), 1000);
-    const maxPatients = Math.max(...monthlyPatients.map(m => m.count), 5);
-
-    const stats8 = [
-      { label: 'Total Patients', value: totalPatients.toString(), icon: <Users size={22} />, color: 'primary' },
-      { label: 'Total Doctors', value: totalDoctors.toString(), icon: <Stethoscope size={22} />, color: 'success' },
-      { label: 'Total Staff', value: totalStaff.toString(), icon: <UserCheck size={22} />, color: 'info' },
-      { label: "Today's Appointments", value: todayAppts.toString(), icon: <CalendarDays size={22} />, color: 'warning' },
-      { label: 'Active Admissions', value: activeAdmissions.toString(), icon: <Activity size={22} />, color: 'primary' },
-      { label: 'Pending Prescriptions', value: pendingRx.toString(), icon: <Pill size={22} />, color: 'success' },
-      { label: 'Pending Lab Orders', value: pendingLabs.toString(), icon: <FlaskConical size={22} />, color: 'info' },
-      { label: "Today's Revenue", value: `₹${todayRevenue.toLocaleString('en-IN')}`, icon: <DollarSign size={22} />, color: 'warning' },
-    ];
-
-    const overviewMetrics = [
-      { label: 'Total Patients Registered (Month)', value: patientsThisMonth.toString(), change: `${newPatientsThisWeek} new this week`, color: 'primary', icon: <Users size={18} /> },
-      { label: 'Total Appointments (Month)', value: apptsThisMonth.toString(), change: 'Monthly volume', color: 'info', icon: <CalendarDays size={18} /> },
-      { label: 'Revenue Generated (Month)', value: `₹${revenueThisMonth.toLocaleString('en-IN')}`, change: 'Month-to-date earnings', color: 'success', icon: <DollarSign size={18} /> },
-      { label: 'New Registrations (Week)', value: newPatientsThisWeek.toString(), change: 'Last 7 days registration', color: 'warning', icon: <TrendingUp size={18} /> },
-    ];
-
-    return (
-      <div>
-        {/* Welcome */}
-        <div style={{ marginBottom: '32px' }}>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.5px' }}>
-            Good day, {user?.name?.split(' ')[0]} 👋
-          </h2>
-          <p style={{ color: 'var(--color-text-secondary)', marginTop: '4px' }}>
-            Monitor clinic metrics, admissions, and hospital analytics in real-time.
-          </p>
-        </div>
-
-        {/* 1. Symmetrical Stats Grid */}
-        <div className="stats-grid" style={{ marginBottom: '32px' }}>
-          {stats8.map((stat, i) => (
-            <div className="stat-card" key={i}>
-              <div className={`stat-card-icon ${stat.color}`}>
-                {stat.icon}
-              </div>
-              <div className="stat-card-info">
-                <h3>{stat.value}</h3>
-                <p>{stat.label}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* 2. Hospital Overview Section */}
-        <div style={{ marginBottom: '32px' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Activity size={18} style={{ color: 'var(--color-primary)' }} />
-            Hospital Overview (This Month)
-          </h3>
-          <div className="stats-grid">
-            {overviewMetrics.map((metric, i) => (
-              <div className="stat-card" key={i}>
-                <div className={`stat-card-icon ${metric.color}`}>
-                  {metric.icon}
-                </div>
-                <div className="stat-card-info">
-                  <h3>{metric.value}</h3>
-                  <p>{metric.label}</p>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--color-success)', fontWeight: 600, marginTop: '4px' }}>
-                    {metric.change}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 3. SVG Analytics Charts */}
-        <div>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <BarChart3 size={18} style={{ color: 'var(--color-primary)' }} />
-            System Analytics Trends
-          </h3>
-          
-          <div className="dashboard-grid" style={{ marginBottom: '24px' }}>
-            {/* Chart 1: Appointment Trends */}
-            <div className="card">
-              <div className="card-header">
-                <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <CalendarDays size={18} style={{ color: 'var(--color-primary)' }} />
-                  Appointment Trends
-                </h3>
-                <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Daily (Last 7 days)</span>
-              </div>
-              <div className="card-body" style={{ padding: '16px 20px 24px' }}>
-                <div style={{ height: '200px', width: '100%' }}>
-                  <svg width="100%" height="100%" viewBox="0 0 500 200" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--color-primary)" />
-                        <stop offset="100%" stopColor="var(--color-primary-dark, var(--color-primary))" />
-                      </linearGradient>
-                    </defs>
-                    <line x1="30" y1="30" x2="480" y2="30" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                    <line x1="30" y1="90" x2="480" y2="90" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                    <line x1="30" y1="150" x2="480" y2="150" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                    
-                    {dailyAppts.map((d, i) => {
-                      const x = 50 + i * 62;
-                      const h = (d.count / maxAppts) * 120;
-                      const y = 150 - h;
-                      return (
-                        <g key={i}>
-                          <rect x={x} y={y} width="28" height={h} rx="4" fill="url(#barGrad)" />
-                          <text x={x + 14} y={y - 6} textAnchor="middle" fill="var(--color-text)" fontSize="10" fontWeight="700">
-                            {d.count}
-                          </text>
-                          <text x={x + 14} y="172" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="10">
-                            {d.label}
-                          </text>
-                        </g>
-                      );
-                    })}
-                    <line x1="30" y1="150" x2="480" y2="150" stroke="var(--color-text-secondary)" strokeWidth="1" opacity="0.3" />
-                  </svg>
-                </div>
-              </div>
-            </div>
-
-            {/* Chart 2: Revenue Analytics */}
-            <div className="card">
-              <div className="card-header">
-                <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <DollarSign size={18} style={{ color: 'var(--color-success)' }} />
-                  Revenue Analytics
-                </h3>
-                <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Monthly (Last 6 months)</span>
-              </div>
-              <div className="card-body" style={{ padding: '16px 20px 24px' }}>
-                <div style={{ height: '200px', width: '100%' }}>
-                  <svg width="100%" height="100%" viewBox="0 0 500 200" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--color-success)" stopOpacity="0.4" />
-                        <stop offset="100%" stopColor="var(--color-success)" stopOpacity="0" />
-                      </linearGradient>
-                    </defs>
-                    <line x1="30" y1="30" x2="480" y2="30" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                    <line x1="30" y1="90" x2="480" y2="90" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                    <line x1="30" y1="150" x2="480" y2="150" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-
-                    {(() => {
-                      const points = monthlyRevenue.map((m, i) => {
-                        const x = 50 + i * 82;
-                        const y = 150 - (m.total / maxRevenue) * 120;
-                        return { x, y, total: m.total, label: m.label };
-                      });
-
-                      const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-                      const areaD = `${pathD} L ${points[points.length - 1].x} 150 L ${points[0].x} 150 Z`;
-
-                      return (
-                        <g>
-                          <path d={areaD} fill="url(#areaGrad)" />
-                          <path d={pathD} fill="none" stroke="var(--color-success)" strokeWidth="3" strokeLinecap="round" />
-                          {points.map((p, i) => (
-                            <g key={i}>
-                              <circle cx={p.x} cy={p.y} r="5" fill="var(--color-success)" stroke="#fff" strokeWidth="2" />
-                              <text x={p.x} y={p.y - 8} textAnchor="middle" fill="var(--color-text)" fontSize="9" fontWeight="700">
-                                ₹{(p.total / 1000).toFixed(0)}k
-                              </text>
-                              <text x={p.x} y="172" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="10">
-                                {p.label}
-                              </text>
-                            </g>
-                          ))}
-                        </g>
-                      );
-                    })()}
-                    <line x1="30" y1="150" x2="480" y2="150" stroke="var(--color-text-secondary)" strokeWidth="1" opacity="0.3" />
-                  </svg>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Chart 3: Patient Registration Trend (Full Width) */}
-          <div className="card" style={{ marginBottom: '24px' }}>
-            <div className="card-header">
-              <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Users size={18} style={{ color: 'var(--color-primary)' }} />
-                Patient Registration Trend
-              </h3>
-              <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>New Patients Added (Last 6 months)</span>
-            </div>
-            <div className="card-body" style={{ padding: '16px 20px 24px' }}>
-              <div style={{ height: '200px', width: '100%' }}>
-                <svg width="100%" height="100%" viewBox="0 0 500 200" preserveAspectRatio="none">
-                  <defs>
-                    <linearGradient id="emeraldGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--color-primary)" />
-                      <stop offset="100%" stopColor="var(--color-primary-dark, var(--color-primary))" />
-                    </linearGradient>
-                  </defs>
-                  <line x1="30" y1="30" x2="480" y2="30" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                  <line x1="30" y1="90" x2="480" y2="90" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-                  <line x1="30" y1="150" x2="480" y2="150" stroke="var(--color-border)" strokeWidth="1" opacity="0.4" />
-
-                  {monthlyPatients.map((m, i) => {
-                    const x = 50 + i * 82;
-                    const h = (m.count / maxPatients) * 120;
-                    const y = 150 - h;
-                    return (
-                      <g key={i}>
-                        <rect x={x} y={y} width="32" height={h} rx="4" fill="url(#emeraldGrad)" />
-                        <text x={x + 16} y={y - 6} textAnchor="middle" fill="var(--color-text)" fontSize="10" fontWeight="700">
-                          {m.count}
-                        </text>
-                        <text x={x + 16} y="172" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="10">
-                          {m.label}
-                        </text>
-                      </g>
-                    );
-                  })}
-                  <line x1="30" y1="150" x2="480" y2="150" stroke="var(--color-text-secondary)" strokeWidth="1" opacity="0.3" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div>
-    );
+    return <AdminDashboard />;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 4. CLINICIAN / ADMIN (DEFAULT) DASHBOARD LAYOUT
-  // ─────────────────────────────────────────────────────────────────────────
-  const stats = [
-    { label: 'Total Registered Patients', value: patientsList.length.toString(), icon: <Users size={22} />, color: 'primary' },
-    { label: 'Today\'s Scheduled Appointments', value: appointments.length.toString(), icon: <CalendarDays size={22} />, color: 'info' },
-    { label: 'Active Encounters', value: appointments.filter(a => a.status === 'CHECKED_IN').length.toString(), icon: <Stethoscope size={22} />, color: 'warning' },
-    { label: 'Completed Visits Today', value: appointments.filter(a => a.status === 'COMPLETED').length.toString(), icon: <Pill size={22} />, color: 'success' },
-  ];
+  if (user?.role === 'CLINICIAN') {
+    return <ClinicianDashboard />;
+  }
 
-  const recentActivities = [
-    { text: 'Patient checked in at Reception Desk', time: 'Just now', color: 'var(--color-info)' },
-    { text: 'Encounter completed by Clinician', time: '10 minutes ago', color: 'var(--color-success)' },
-    { text: 'New prescription issued for Patient', time: '25 minutes ago', color: 'var(--color-primary)' },
-    { text: 'Patient registration updated', time: '1 hour ago', color: 'var(--color-warning)' },
-  ];
+  if (user?.role === 'PHARMACIST') {
+    return <PharmacistDashboard />;
+  }
 
-  return (
-    <div>
-      {/* Welcome */}
-      <div style={{ marginBottom: '32px' }}>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.5px' }}>
-          Good day, {user?.name?.split(' ')[0]} 👋
-        </h2>
-        <p style={{ color: 'var(--color-text-secondary)', marginTop: '4px' }}>
-          Review clinic outpatient statistics and manage active medical encounters.
-        </p>
-      </div>
+  if (user?.role === 'LAB_TECHNICIAN') {
+    return <LabTechDashboard />;
+  }
 
-      {/* Stats Grid */}
-      <div className="stats-grid" style={{ marginBottom: '32px' }}>
-        {stats.map((stat) => (
-          <div className="stat-card" key={stat.label}>
-            <div className={`stat-card-icon ${stat.color}`}>{stat.icon}</div>
-            <div className="stat-card-info">
-              <h3>{stat.value}</h3>
-              <p>{stat.label}</p>
-            </div>
-          </div>
-        ))}
-      </div>
+  if (user?.role === 'FINANCE_OFFICER') {
+    return <FinanceDashboard />;
+  }
 
-      {/* Quick Actions */}
-      <div style={{ marginBottom: '32px' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '16px' }}>Quick Actions</h3>
-        <div className="quick-actions">
-          <div className="quick-action-card" onClick={() => navigate('/encounters/new')}>
-            <div className="qa-icon" style={{ background: 'var(--color-primary-100)', color: 'var(--color-primary-dark)' }}>
-              <Plus size={24} />
-            </div>
-            <h4>New Encounter</h4>
-            <p>Start a clinical visit</p>
-          </div>
-          <div className="quick-action-card" onClick={() => navigate('/prescriptions')}>
-            <div className="qa-icon" style={{ background: 'var(--color-success-bg)', color: 'var(--color-success)' }}>
-              <Pill size={24} />
-            </div>
-            <h4>Write Prescription</h4>
-            <p>Prescribe medication</p>
-          </div>
-          <div className="quick-action-card" onClick={() => navigate('/encounters')}>
-            <div className="qa-icon" style={{ background: 'var(--color-warning-bg)', color: 'var(--color-warning)' }}>
-              <Stethoscope size={24} />
-            </div>
-            <h4>View Encounters</h4>
-            <p>Review clinical notes</p>
-          </div>
-          <div className="quick-action-card" onClick={() => navigate('/appointments')}>
-            <div className="qa-icon" style={{ background: 'var(--color-info-bg)', color: 'var(--color-info)' }}>
-              <CalendarDays size={24} />
-            </div>
-            <h4>Appointments</h4>
-            <p>Manage clinic schedule</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Dashboard Grid */}
-      <div className="dashboard-grid">
-        {/* Appointments List */}
-        <div className="card">
-          <div className="card-header">
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Clock size={18} style={{ color: 'var(--color-primary)' }} />
-              Today's Scheduled Appointments
-            </h3>
-            <span className="badge badge-primary">{appointments.length}</span>
-          </div>
-          <div className="card-body" style={{ padding: '16px 0 0' }}>
-            {appointments.length === 0 ? (
-              <div className="empty-state" style={{ padding: '24px 0' }}>
-                <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>No appointments scheduled for today.</p>
-              </div>
-            ) : (
-              <div className="data-table-wrapper" style={{ border: 'none', boxShadow: 'none' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Patient</th>
-                      <th>Time</th>
-                      <th>Type</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {appointments.map((appt, i) => (
-                      <tr key={i}>
-                        <td className="cell-main">{appt.patientName}</td>
-                        <td>{formatTime(appt.startAt)}</td>
-                        <td>{appt.serviceType}</td>
-                        <td>{getStatusBadge(appt.status)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Recent Activity */}
-        <div className="card">
-          <div className="card-header">
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <AlertCircle size={18} style={{ color: 'var(--color-warning)' }} />
-              Recent Activity
-            </h3>
-          </div>
-          <div className="activity-list">
-            {recentActivities.map((activity, i) => (
-              <div className="activity-item" key={i}>
-                <div className="activity-dot" style={{ background: activity.color }} />
-                <div className="activity-content">
-                  <p>{activity.text}</p>
-                  <span>{activity.time}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  // Fallback for any other roles (COMPLIANCE_OFFICER, etc.)
+  return <AdminDashboard />;
 }

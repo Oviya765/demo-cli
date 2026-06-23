@@ -268,7 +268,7 @@ img { max-width: 100%; display: block; }
 
 /* ── Tables ── */
 .data-table-wrapper {
-  overflow-x: auto;
+  overflow-x:auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
@@ -277,6 +277,7 @@ img { max-width: 100%; display: block; }
 .data-table {
   width: 100%;
   border-collapse: collapse;
+
 }
 
 .data-table th {
@@ -418,6 +419,7 @@ img { max-width: 100%; display: block; }
   font-size: var(--font-size-2xl);
   font-weight: 700;
   letter-spacing: -0.5px;
+  overflow: visible;
 }
 
 .page-header p {

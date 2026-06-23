@@ -3,19 +3,12 @@ import type { PrescriptionResponseDto, PrescriptionRequestDto } from '../models/
 const BASE_URL = 'http://localhost:8081';
 
 function getAuthHeaders(): Record<string, string> {
-  try {
-    const stored = localStorage.getItem('clinic_flow_user');
-    if (stored) {
-      const authUser = JSON.parse(stored);
-      if (authUser?.token) {
-        return {
-          'Authorization': `Bearer ${authUser.token}`,
-          'Content-Type': 'application/json'
-        };
-      }
-    }
-  } catch (err) {
-    console.error('Error reading auth token', err);
+  const token = localStorage.getItem('clinic_flow_token');
+  if (token) {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
   }
   return {
     'Content-Type': 'application/json'
@@ -48,6 +41,21 @@ export async function getPrescriptionById(rxId: number): Promise<PrescriptionRes
 
   if (!response.ok) {
     throw new Error(`Prescription #${rxId} not found.`);
+  }
+  return response.json();
+}
+
+/**
+ * GET /api/v1/prescriptions/patient/{patientId}
+ */
+export async function getPrescriptionsByPatientId(patientId: number): Promise<PrescriptionResponseDto[]> {
+  const response = await fetch(`${BASE_URL}/api/v1/prescriptions/patient/${patientId}`, {
+    method: 'GET',
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch prescriptions for patient #${patientId}.`);
   }
   return response.json();
 }

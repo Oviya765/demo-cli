@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from '../components/layout/MainLayout';
 import ProtectedRoute from '../components/guards/ProtectedRoute';
+import type { UserRole } from '../models/types';
 
 // Auth
 import LoginPage from '../pages/auth/LoginPage';
@@ -14,6 +15,7 @@ import DashboardPage from '../pages/dashboard/DashboardPage';
 import EncounterListPage from '../pages/encounters/EncounterListPage';
 import EncounterDetailPage from '../pages/encounters/EncounterDetailPage';
 import EncounterFormPage from '../pages/encounters/EncounterFormPage';
+import EncounterSummaryPage from '../pages/patients/EncounterSummaryPage';
 
 // Prescriptions
 import PrescriptionListPage from '../pages/prescriptions/PrescriptionListPage';
@@ -23,9 +25,11 @@ import PrescriptionFormPage from '../pages/prescriptions/PrescriptionFormPage';
 // Appointments
 import AppointmentListPage from '../pages/appointments/AppointmentListPage';
 import AppointmentFormPage from '../pages/appointments/AppointmentFormPage';
+import AppointmentDetailPage from '../pages/appointments/AppointmentDetailPage';
 
 // Patients
 import PatientListPage from '../pages/patients/PatientListPage';
+import PatientDetailPage from '../pages/patients/PatientDetailPage';
 
 // Lab Module
 import LabDashboardPage from '../pages/lab/LabDashboradPage';
@@ -45,6 +49,27 @@ import ReportPage from '../pages/reports/ReportPage';
 // Pharmacy & Inventory
 import PharmacyPage from '../pages/pharmacy/PharmacyPage';
 import InventoryPage from '../pages/inventory/InventoryPage';
+
+/**
+ * Role groups for route-level authorization. These mirror the sidebar
+ * visibility rules and the backend Spring Security authorities so the UI and
+ * API agree on who can access what.
+ */
+const ROLES: Record<string, UserRole[]> = {
+  PATIENTS: ['ADMIN', 'CLINICIAN', 'RECEPTION'],
+  APPOINTMENTS: ['ADMIN', 'CLINICIAN', 'RECEPTION', 'PATIENT'],
+  ENCOUNTERS: ['ADMIN', 'CLINICIAN'],
+  ENCOUNTER_SUMMARY: ['ADMIN', 'CLINICIAN', 'RECEPTION'],
+  PRESCRIPTIONS_VIEW: ['ADMIN', 'CLINICIAN', 'PATIENT'],
+  PRESCRIPTIONS_EDIT: ['CLINICIAN'],
+  LAB_VIEW: ['ADMIN', 'CLINICIAN', 'LAB_TECHNICIAN', 'PATIENT'],
+  LAB_CREATE: ['CLINICIAN'],
+  PHARMACY: ['ADMIN', 'PHARMACIST'],
+  INVENTORY: ['ADMIN', 'PHARMACIST'],
+  INVOICES: ['ADMIN', 'FINANCE_OFFICER', 'RECEPTION'],
+  REPORTS: ['ADMIN', 'FINANCE_OFFICER'],
+  ADMIN: ['ADMIN'],
+};
 
 export default function AppRouter() {
   return (
@@ -71,38 +96,47 @@ export default function AppRouter() {
           </ProtectedRoute>
         }
       >
+        {/* Available to every authenticated user */}
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
 
         {/* Encounters */}
-        <Route path="/encounters" element={<EncounterListPage />} />
-        <Route path="/encounters/new" element={<EncounterFormPage />} />
-        <Route path="/encounters/:id" element={<EncounterDetailPage />} />
-        <Route path="/encounters/:id/edit" element={<EncounterFormPage />} />
+        <Route path="/encounters" element={<ProtectedRoute allowedRoles={ROLES.ENCOUNTERS}><EncounterListPage /></ProtectedRoute>} />
+        <Route path="/encounters/new" element={<ProtectedRoute allowedRoles={ROLES.ENCOUNTERS}><EncounterFormPage /></ProtectedRoute>} />
+        <Route path="/encounters/:id" element={<ProtectedRoute allowedRoles={ROLES.ENCOUNTERS}><EncounterDetailPage /></ProtectedRoute>} />
+        <Route path="/encounters/:id/edit" element={<ProtectedRoute allowedRoles={ROLES.ENCOUNTERS}><EncounterFormPage /></ProtectedRoute>} />
+        <Route path="/encounters/:id/summary" element={<ProtectedRoute allowedRoles={ROLES.ENCOUNTER_SUMMARY}><EncounterSummaryPage /></ProtectedRoute>} />
 
         {/* Prescriptions */}
-        <Route path="/prescriptions" element={<PrescriptionListPage />} />
-        <Route path="/prescriptions/new" element={<PrescriptionFormPage />} />
-        <Route path="/prescriptions/:id" element={<PrescriptionDetailPage />} />
-        <Route path="/prescriptions/:id/edit" element={<PrescriptionFormPage />} />
+        <Route path="/prescriptions" element={<ProtectedRoute allowedRoles={ROLES.PRESCRIPTIONS_VIEW}><PrescriptionListPage /></ProtectedRoute>} />
+        <Route path="/prescriptions/new" element={<ProtectedRoute allowedRoles={ROLES.PRESCRIPTIONS_EDIT}><PrescriptionFormPage /></ProtectedRoute>} />
+        <Route path="/prescriptions/:id" element={<ProtectedRoute allowedRoles={ROLES.PRESCRIPTIONS_VIEW}><PrescriptionDetailPage /></ProtectedRoute>} />
+        <Route path="/prescriptions/:id/edit" element={<ProtectedRoute allowedRoles={ROLES.PRESCRIPTIONS_EDIT}><PrescriptionFormPage /></ProtectedRoute>} />
 
         {/* Patients Registry */}
-        <Route path="/patients" element={<PatientListPage />} />
-        
+        <Route path="/patients" element={<ProtectedRoute allowedRoles={ROLES.PATIENTS}><PatientListPage /></ProtectedRoute>} />
+        <Route path="/patients/:id" element={<ProtectedRoute allowedRoles={ROLES.PATIENTS}><PatientDetailPage /></ProtectedRoute>} />
+
         {/* Appointments */}
-        <Route path="/appointments" element={<AppointmentListPage />} />
-        <Route path="/appointments/new" element={<AppointmentFormPage />} />
+        <Route path="/appointments" element={<ProtectedRoute allowedRoles={ROLES.APPOINTMENTS}><AppointmentListPage /></ProtectedRoute>} />
+        <Route path="/appointments/new" element={<ProtectedRoute allowedRoles={ROLES.APPOINTMENTS}><AppointmentFormPage /></ProtectedRoute>} />
+        <Route path="/appointments/:id" element={<ProtectedRoute allowedRoles={ROLES.APPOINTMENTS}><AppointmentDetailPage /></ProtectedRoute>} />
 
         {/* Lab Module */}
-        <Route path="/lab" element={<LabDashboardPage />} />
-        <Route path="/lab/new" element={<LabOrderFormPage />} />
-        <Route path="/lab/:id" element={<LabOrderDetailPage />} />
+        <Route path="/lab" element={<ProtectedRoute allowedRoles={ROLES.LAB_VIEW}><LabDashboardPage /></ProtectedRoute>} />
+        <Route path="/lab/new" element={<ProtectedRoute allowedRoles={ROLES.LAB_CREATE}><LabOrderFormPage /></ProtectedRoute>} />
+        <Route path="/lab/:id" element={<ProtectedRoute allowedRoles={ROLES.LAB_VIEW}><LabOrderDetailPage /></ProtectedRoute>} />
 
-        <Route path="/pharmacy" element={<PharmacyPage />} />
-        <Route path="/inventory" element={<InventoryPage />} />
-        <Route path="/invoices" element={<InvoicePage />} />
-        <Route path="/reports" element={<ReportPage />} />
-        <Route path="/admin/users" element={<AdminUserManagementPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
+        {/* Pharmacy & Inventory */}
+        <Route path="/pharmacy" element={<ProtectedRoute allowedRoles={ROLES.PHARMACY}><PharmacyPage /></ProtectedRoute>} />
+        <Route path="/inventory" element={<ProtectedRoute allowedRoles={ROLES.INVENTORY}><InventoryPage /></ProtectedRoute>} />
+
+        {/* Finance */}
+        <Route path="/invoices" element={<ProtectedRoute allowedRoles={ROLES.INVOICES}><InvoicePage /></ProtectedRoute>} />
+        <Route path="/reports" element={<ProtectedRoute allowedRoles={ROLES.REPORTS}><ReportPage /></ProtectedRoute>} />
+
+        {/* Admin */}
+        <Route path="/admin/users" element={<ProtectedRoute allowedRoles={ROLES.ADMIN}><AdminUserManagementPage /></ProtectedRoute>} />
       </Route>
 
       {/* Redirects */}

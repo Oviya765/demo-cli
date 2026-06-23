@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { toast } from "react-hot-toast";
 import { ArrowLeft, Pencil, Search, Trash2 } from "lucide-react";
+import { useAuth } from "../../contexts/AuthContext";
 import type {
   InvoiceResponseDto as Invoice,
   PatientResponseDto as Patient,
   EncounterResponseDto as Encounter,
   PaymentResponseDto as Payment,
+  ServiceItemResponseDto as ServiceItem,
 } from "../../models/types";
-import { getAllInvoices, createInvoice, deleteInvoice, updateInvoice } from "../../services/invoiceService";
+import { getAllInvoices, createInvoice, deleteInvoice, updateInvoice, getServiceItems } from "../../services/invoiceService";
 import { getAllPayments, createPayment } from "../../services/paymentService";
 import { getAllPatients } from "../../services/patientService";
 import { getAllEncounters } from "../../services/encounterService";
@@ -19,6 +21,20 @@ export interface LineItem {
   unitPrice: number;
   quantity: number;
   amount: number;
+}
+
+// Helper to get the current local date-time formatted for datetime-local inputs
+function nowLocalForInput(): string {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+// Helper to get a local date-time a number of days from now, formatted for datetime-local inputs
+function addDaysLocalForInput(days: number): string {
+  const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
 }
 
 // Helper to format date values for local datetime inputs safely
@@ -57,6 +73,7 @@ function formatDateForDisplay(dateVal: any): string {
 }
 
 export default function InvoicePage() {
+  const { user } = useAuth();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -80,10 +97,8 @@ export default function InvoicePage() {
   // Form States
   const [patientId, setPatientId] = useState<number>(0);
   const [encounterId, setEncounterId] = useState<string>("");
-  const [issuedAt, setIssuedAt] = useState(today);
-  const [dueDate, setDueDate] = useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
-  const [taxes, setTaxes] = useState<number | "">("");
-  const [discounts, setDiscounts] = useState<number | "">("");
+  const [issuedAt, setIssuedAt] = useState(nowLocalForInput());
+  const [dueDate, setDueDate] = useState(addDaysLocalForInput(7));
   const [status, setStatus] = useState<string>("UNPAID");
 
   // Manual Payment States
@@ -95,10 +110,41 @@ export default function InvoicePage() {
   const [paymentPaidAt, setPaymentPaidAt] = useState<string>(today);
   const paymentStatus = "SUCCESS";
 
-  // Service Items State
-  const [serviceItems, setServiceItems] = useState<{ serviceItemCode: string; quantity: number | "" }[]>([
-    { serviceItemCode: "", quantity: 1 }
-  ]);
+  // Service Items State - list of items already added to the invoice
+  const [serviceItems, setServiceItems] = useState<{ serviceItemCode: string; quantity: number | "" }[]>([]);
+
+  // Draft entry for the stationary "add service item" row
+  const [draftCode, setDraftCode] = useState<string>("");
+  const [draftQty, setDraftQty] = useState<number | "">(1);
+
+  // Master list of available service items (with prices) used to compute totals live
+  const [serviceItemCatalog, setServiceItemCatalog] = useState<ServiceItem[]>([]);
+
+  // Fixed tax rate (10%) enforced by the backend; mirrored here only for live preview
+  const TAX_RATE = 0.10;
+
+  // Build a quick lookup of code (upper-cased) -> price
+  const priceByCode = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const item of serviceItemCatalog) {
+      if (item.code) map[item.code.trim().toUpperCase()] = item.price;
+    }
+    return map;
+  }, [serviceItemCatalog]);
+
+  // Live subtotal from the entered service items (codes matched against the catalog)
+  const liveSubtotal = useMemo(() => {
+    return serviceItems.reduce((sum, item) => {
+      const code = item.serviceItemCode.trim().toUpperCase();
+      const price = priceByCode[code];
+      if (!code || price == null) return sum;
+      const qty = item.quantity === "" ? 0 : Number(item.quantity);
+      return sum + price * qty;
+    }, 0);
+  }, [serviceItems, priceByCode]);
+
+  const liveTax = useMemo(() => Math.round(liveSubtotal * TAX_RATE * 100) / 100, [liveSubtotal]);
+  const liveTotal = useMemo(() => Math.round((liveSubtotal + liveTax) * 100) / 100, [liveSubtotal, liveTax]);
 
   // Load datasets from backend APIs
   const loadData = async () => {
@@ -118,6 +164,15 @@ export default function InvoicePage() {
       if (patientData.length > 0 && !patientId) {
         setPatientId(patientData[0].patientId);
       }
+
+      // Service item catalog is optional (used only for the live total preview).
+      // Fetch it separately so a failure here doesn't break the whole page.
+      try {
+        const serviceItemData = await getServiceItems();
+        setServiceItemCatalog(serviceItemData);
+      } catch {
+        setServiceItemCatalog([]);
+      }
     } catch (err: any) {
       toast.error(err.message || "Failed to load database records.");
     } finally {
@@ -133,6 +188,13 @@ export default function InvoicePage() {
   const filteredEncounters = useMemo(() => {
     return encounters.filter((e) => e.patientId === Number(patientId));
   }, [encounters, patientId]);
+
+  // Filter encounters that don't already have invoices
+  const encountersWithoutInvoices = useMemo(() => {
+    return filteredEncounters.filter(
+      (encounter) => !invoices.some((inv) => inv.encounterId === encounter.encounterId)
+    );
+  }, [filteredEncounters, invoices]);
 
   // Calculate pagination
   const paginationData = useMemo(() => {
@@ -172,6 +234,21 @@ export default function InvoicePage() {
     return payments.filter((payment) => payment.patientId === Number(paymentPatientId));
   }, [payments, paymentPatientId]);
 
+  const selectedPaymentInvoice = useMemo(() => {
+    if (!paymentInvoiceId) return null;
+    return invoices.find((invoice) => String(invoice.invoiceId) === paymentInvoiceId) || null;
+  }, [invoices, paymentInvoiceId]);
+
+  const isMedicineDispenseInvoice = useMemo(() => {
+    if (!selectedPaymentInvoice?.lineItemsJson) return false;
+    return selectedPaymentInvoice.lineItemsJson.includes("PHARMACY_DISPENSE");
+  }, [selectedPaymentInvoice]);
+
+  const maxPayableAmount = useMemo(() => {
+    if (!selectedPaymentInvoice) return 0;
+    return getRemainingAmount(selectedPaymentInvoice);
+  }, [selectedPaymentInvoice, payments]);
+
   const logsPaginationData = useMemo(() => {
     const totalItems = filteredPaymentLogs.length;
     const totalPages = Math.max(1, Math.ceil(totalItems / logsItemsPerPage));
@@ -198,27 +275,45 @@ export default function InvoicePage() {
     }
   }, [logsCurrentPage, logsPaginationData.safeCurrentPage]);
 
-  // Handle service item field changes
-  function updateServiceItem(index: number, field: "serviceItemCode" | "quantity", value: string | number) {
-    const updated = [...serviceItems];
-    const item = { ...updated[index] };
-
-    if (field === "serviceItemCode") {
-      item.serviceItemCode = String(value);
-    } else if (field === "quantity") {
-      item.quantity = value === "" ? "" : Number(value);
-    }
-    
-    updated[index] = item;
-    setServiceItems(updated);
-  }
-
+  // Add the current draft entry to the list of service items
   function addServiceItem() {
-    setServiceItems([...serviceItems, { serviceItemCode: "", quantity: 1 }]);
+    const code = draftCode.trim();
+    if (!code) {
+      toast.error("Please enter a service item code.");
+      return;
+    }
+
+    // Only allow codes that exist in the service item catalog
+    const catalogItem = serviceItemCatalog.find(
+      (s) => s.code?.trim().toUpperCase() === code.toUpperCase()
+    );
+    if (!catalogItem) {
+      toast.error(`"${code}" is not a valid service item code.`);
+      return;
+    }
+
+    // Prevent adding the same code twice; merge quantities instead
+    const qty = draftQty === "" || Number(draftQty) < 1 ? 1 : Number(draftQty);
+    const normalizedCode = catalogItem.code;
+    const existingIndex = serviceItems.findIndex(
+      (item) => item.serviceItemCode.trim().toUpperCase() === normalizedCode.toUpperCase()
+    );
+    if (existingIndex !== -1) {
+      setServiceItems((prev) =>
+        prev.map((item, i) =>
+          i === existingIndex
+            ? { ...item, quantity: (item.quantity === "" ? 0 : Number(item.quantity)) + qty }
+            : item
+        )
+      );
+    } else {
+      setServiceItems((prev) => [...prev, { serviceItemCode: normalizedCode, quantity: qty }]);
+    }
+    setDraftCode("");
+    setDraftQty(1);
   }
 
   function removeServiceItem(index: number) {
-    if (serviceItems.length === 1) return;
     setServiceItems(serviceItems.filter((_, i) => i !== index));
   }
 
@@ -239,20 +334,18 @@ export default function InvoicePage() {
       return;
     }
 
-    if (taxes === "" || discounts === "") {
-      toast.error("Tax and discount are required.");
-      return;
-    }
-
     const formattedIssuedAt = (issuedAt && typeof issuedAt === "string" && issuedAt.includes("T") && issuedAt.length === 16) ? `${issuedAt}:00` : (issuedAt || "");
     const formattedDueDate = (dueDate && typeof dueDate === "string" && dueDate.includes("T") && dueDate.length === 16) ? `${dueDate}:00` : (dueDate || "");
+
+    if (new Date(formattedDueDate).getTime() <= new Date(formattedIssuedAt).getTime()) {
+      toast.error("Due date must be after the issue date.");
+      return;
+    }
 
     try {
       const payload = {
         patientId: Number(patientId),
         encounterId: encounterId ? Number(encounterId) : null,
-        taxes: Number(taxes),
-        discounts: Number(discounts),
         issuedAt: formattedIssuedAt,
         dueDate: formattedDueDate,
         status: status,
@@ -269,15 +362,21 @@ export default function InvoicePage() {
       
       // Reset Form
       setEditingInvoice(null);
-      setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
-      setTaxes("");
-      setDiscounts("");
+      setServiceItems([]);
+      setDraftCode("");
+      setDraftQty(1);
       setEncounterId("");
       setStatus("UNPAID");
       setShowForm(false);
       loadData();
     } catch (err: any) {
-      toast.error(err.message || (editingInvoice ? "Failed to update invoice." : "Failed to create invoice."));
+      const errorMessage = err.message || (editingInvoice ? "Failed to update invoice." : "Failed to create invoice.");
+      // Enhanced error handling for duplicate invoice attempts
+      if (errorMessage.includes("already exists") || errorMessage.includes("duplicate")) {
+        toast.error("This encounter already has an invoice. Please select a different encounter or create a new invoice.");
+      } else {
+        toast.error(errorMessage);
+      }
     }
   }
 
@@ -302,8 +401,6 @@ export default function InvoicePage() {
     setIssuedAt(formatDateForInput(inv.issuedAt));
     setDueDate(formatDateForInput(inv.dueDate));
     
-    setTaxes(inv.taxes || 0);
-    setDiscounts(inv.discounts || 0);
     setStatus(inv.status);
     
     try {
@@ -314,10 +411,10 @@ export default function InvoicePage() {
           quantity: item.quantity || 1
         })));
       } else {
-        setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
+        setServiceItems([]);
       }
     } catch {
-      setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
+      setServiceItems([]);
     }
     
     setShowForm(true);
@@ -331,6 +428,29 @@ export default function InvoicePage() {
 
   function getRemainingAmount(invoice: Invoice): number {
     return Math.max(0, invoice.totalAmount - getAlreadyPaid(invoice.invoiceId));
+  }
+
+  function getInvoiceDeductionRows(invoice: Invoice): { paymentId: number; method: string; paidAt: string; amount: number; remaining: number }[] {
+    const invoicePayments = payments
+      .filter(
+        (payment) =>
+          payment.invoiceId === invoice.invoiceId &&
+          (payment.status === "SUCCESS" || payment.status === "COMPLETED")
+      )
+      .sort((a, b) => new Date(a.paidAt).getTime() - new Date(b.paidAt).getTime());
+
+    let remaining = invoice.totalAmount;
+
+    return invoicePayments.map((payment) => {
+      remaining = Math.max(0, remaining - payment.amount);
+      return {
+        paymentId: payment.paymentId,
+        method: payment.method,
+        paidAt: payment.paidAt,
+        amount: payment.amount,
+        remaining,
+      };
+    });
   }
 
   function handlePaySelect(invoice: Invoice) {
@@ -375,13 +495,24 @@ export default function InvoicePage() {
     event.preventDefault();
     if (!paymentInvoiceId || !paymentPatientId || paymentAmount <= 0) return;
 
+    const amountToSubmit = isMedicineDispenseInvoice && selectedPaymentInvoice
+      ? getRemainingAmount(selectedPaymentInvoice)
+      : paymentAmount;
+
+    if (amountToSubmit <= 0) return;
+
+    if (amountToSubmit > maxPayableAmount) {
+      toast.error(`Payment amount cannot exceed ${money(maxPayableAmount)}.`);
+      return;
+    }
+
     const formattedPaidAt = paymentPaidAt.includes("T") && paymentPaidAt.length === 16 ? `${paymentPaidAt}:00` : paymentPaidAt;
 
     try {
       await createPayment({
         invoiceId: Number(paymentInvoiceId),
         patientId: Number(paymentPatientId),
-        amount: paymentAmount,
+        amount: amountToSubmit,
         method: paymentMethod,
         paidAt: formattedPaidAt,
         status: paymentStatus,
@@ -406,12 +537,13 @@ export default function InvoicePage() {
 
   const isInvoiceFormPage = showForm;
   const isPaymentPage = showPaymentForm;
+  const canDeleteInvoice = user?.role !== "RECEPTION";
 
   function handleBackToMainPage() {
     setEditingInvoice(null);
-    setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
-    setTaxes("");
-    setDiscounts("");
+    setServiceItems([]);
+    setDraftCode("");
+    setDraftQty(1);
     setEncounterId("");
     setStatus("UNPAID");
     setShowForm(false);
@@ -453,13 +585,15 @@ export default function InvoicePage() {
               <button className="btn btn-primary" onClick={() => {
                 if (showForm) {
                   setEditingInvoice(null);
-                  setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
-                  setTaxes("");
-                  setDiscounts("");
+                  setServiceItems([]);
+                  setDraftCode("");
+                  setDraftQty(1);
                   setEncounterId("");
                   setStatus("UNPAID");
                   setShowForm(false);
                 } else {
+                  setIssuedAt(nowLocalForInput());
+                  setDueDate(addDaysLocalForInput(7));
                   setShowForm(true);
                 }
               }}>
@@ -478,9 +612,9 @@ export default function InvoicePage() {
               <h3 style={{ fontWeight: 600 }}>{editingInvoice ? `Edit Invoice #${editingInvoice.invoiceId}` : "Create New Invoice"}</h3>
               <button type="button" style={{ background: "none", border: "none", fontSize: "1.5rem", cursor: "pointer", color: "var(--color-text-muted)" }} onClick={() => {
                 setEditingInvoice(null);
-                setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
-                setTaxes("");
-                setDiscounts("");
+                setServiceItems([]);
+                setDraftCode("");
+                setDraftQty(1);
                 setEncounterId("");
                 setStatus("UNPAID");
                 setShowForm(false);
@@ -508,7 +642,7 @@ export default function InvoicePage() {
                 <label className="form-label">Related Encounter</label>
                 <select className="form-select" value={encounterId} onChange={(e) => setEncounterId(e.target.value)}>
                   <option value="">-- None / General --</option>
-                  {filteredEncounters.map((e) => (
+                  {encountersWithoutInvoices.map((e) => (
                     <option key={e.encounterId} value={e.encounterId}>
                       Encounter #{e.encounterId} - {e.visitType} ({e.chiefComplaint || "No details"})
                     </option>
@@ -520,86 +654,149 @@ export default function InvoicePage() {
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Issue Date *</label>
-                <input className="form-input" type="datetime-local" value={issuedAt} onChange={(e) => setIssuedAt(e.target.value)} required />
+                <input className="form-input" type="datetime-local" value={issuedAt} readOnly required />
               </div>
 
               <div className="form-group">
                 <label className="form-label">Due Date *</label>
-                <input className="form-input" type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
+                <input className="form-input" type="datetime-local" value={dueDate} min={issuedAt} onChange={(e) => setDueDate(e.target.value)} required />
               </div>
             </div>
 
-            <div className="form-row">
+            {/* <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Tax Override Amount (₹) *</label>
-                <input className="form-input" type="text" inputMode="decimal" pattern="[0-9]*\.?[0-9]*" value={taxes} onChange={(e) => setTaxes(e.target.value === "" ? "" : Number(e.target.value))} required />
+                <label className="form-label">Tax (Fixed 10% of Subtotal)</label>
+                <input className="form-input" type="text" value={money(liveTax)} readOnly disabled />
+                <small style={{ color: "var(--color-text-muted)", fontSize: "12px" }}>
+                  Tax is automatically applied at 10% of the subtotal and cannot be changed.
+                </small>
               </div>
-
-              <div className="form-group">
-                <label className="form-label">Discount Amount (₹) *</label>
-                <input className="form-input" type="text" inputMode="decimal" pattern="[0-9]*\.?[0-9]*" value={discounts} onChange={(e) => setDiscounts(e.target.value === "" ? "" : Number(e.target.value))} required />
-              </div>
-            </div>
+            </div> */}
 
             <div style={{ marginTop: "20px" }}>
               <h4 style={{ marginBottom: "12px", fontSize: "14px", fontWeight: 600 }}>Service Items</h4>
-              <div className="items-list">
-                {serviceItems.map((item, idx) => (
-                  <div key={idx} className="item-row" style={{ gridTemplateColumns: "3fr 1.5fr auto", alignItems: "end", gap: "16px" }}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Service Item Code *</label>
-                      <input
-                        className="form-input"
-                        type="text"
-                        placeholder="e.g. CONSULTATION, XRAY-01, LAB-05"
-                        value={item.serviceItemCode}
-                        onChange={(e) => updateServiceItem(idx, "serviceItemCode", e.target.value)}
-                        required
-                      />
-                    </div>
 
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Quantity *</label>
-                      <input
-                        className="form-input"
-                        type="number"
-                        placeholder="1"
-                        min="1"
-                        value={item.quantity}
-                        onChange={(e) => updateServiceItem(idx, "quantity", e.target.value)}
-                        required
-                      />
-                    </div>
+              {/* Stationary add-item row: stays in place; added items appear in the table below */}
+              <div className="item-row" style={{ display: "grid", gridTemplateColumns: "3fr 1.5fr auto", alignItems: "end", gap: "16px" }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Service Item Code</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="e.g. CONSULTATION, XRAY-01, LAB-05"
+                    value={draftCode}
+                    list="service-item-codes"
+                    onChange={(e) => setDraftCode(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addServiceItem();
+                      }
+                    }}
+                  />
+                  <datalist id="service-item-codes">
+                    {serviceItemCatalog.map((s) => (
+                      <option key={s.serviceItemId} value={s.code}>{s.name}</option>
+                    ))}
+                  </datalist>
+                </div>
 
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      style={{ height: "42px" }}
-                      onClick={() => removeServiceItem(idx)}
-                      disabled={serviceItems.length === 1}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Quantity</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    placeholder="1"
+                    min="1"
+                    value={draftQty}
+                    onChange={(e) => setDraftQty(e.target.value === "" ? "" : Number(e.target.value))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addServiceItem();
+                      }
+                    }}
+                  />
+                </div>
+
+                <button type="button" className="btn btn-primary" style={{ height: "42px" }} onClick={addServiceItem}>
+                  + Add Item
+                </button>
               </div>
 
-              <button type="button" className="btn btn-secondary" style={{ marginTop: "12px" }} onClick={addServiceItem}>
-                + Add Service Code
-              </button>
+              {/* Separate table listing the added service items, each with a Remove button */}
+              <div style={{ marginTop: "16px", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
+                  <thead>
+                    <tr style={{ background: "var(--color-surface)", textAlign: "left" }}>
+                      <th style={{ padding: "10px 12px" }}>Code</th>
+                      <th style={{ padding: "10px 12px" }}>Name</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right" }}>Unit Price</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right" }}>Qty</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right" }}>Amount</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center" }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {serviceItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "16px 12px", textAlign: "center", color: "var(--color-text-muted)" }}>
+                          No service items added yet. Use the row above to add items.
+                        </td>
+                      </tr>
+                    ) : (
+                      serviceItems.map((item, idx) => {
+                        const code = item.serviceItemCode.trim().toUpperCase();
+                        const catalogItem = serviceItemCatalog.find((s) => s.code?.trim().toUpperCase() === code);
+                        const unitPrice = catalogItem?.price;
+                        const qty = item.quantity === "" ? 0 : Number(item.quantity);
+                        return (
+                          <tr key={idx} style={{ borderTop: "1px solid var(--color-border)" }}>
+                            <td style={{ padding: "10px 12px", fontWeight: 600 }}>{item.serviceItemCode}</td>
+                            <td style={{ padding: "10px 12px" }}>{catalogItem?.name || "—"}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "right" }}>{unitPrice != null ? money(unitPrice) : "—"}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "right" }}>{item.quantity}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "right" }}>{unitPrice != null ? money(unitPrice * qty) : "—"}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                              <button type="button" className="btn btn-danger btn-sm" onClick={() => removeServiceItem(idx)}>
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ marginTop: "20px", padding: "16px", background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", maxWidth: "320px", marginLeft: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontSize: "14px" }}>
+                <span>Subtotal:</span>
+                <span>{money(liveSubtotal)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontSize: "14px" }}>
+                <span>Tax (10%):</span>
+                <span>{money(liveTax)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: "8px", borderTop: "1px solid var(--color-border)", fontWeight: 600 }}>
+                <span>Total:</span>
+                <span>{money(liveTotal)}</span>
+              </div>
             </div>
 
             <div style={{ marginTop: "16px", fontSize: "12px", color: "var(--color-text-muted)" }}>
-              * Note: Invoice subtotals and totals will be calculated automatically by the database based on the service codes entered.
+              * Note: Totals shown are a live preview based on the entered service codes. A fixed 10% tax is applied to the subtotal and the final amounts are confirmed by the server. Codes not found in the catalog are excluded from the preview.
             </div>
 
             <div style={{ marginTop: "24px", display: "flex", gap: "12px" }}>
               <button type="submit" className="btn btn-primary">{editingInvoice ? "Save Changes" : "Create Invoice"}</button>
               <button type="button" className="btn btn-secondary" onClick={() => {
                 setEditingInvoice(null);
-                setServiceItems([{ serviceItemCode: "", quantity: 1 }]);
-                setTaxes("");
-                setDiscounts("");
+                setServiceItems([]);
+                setDraftCode("");
+                setDraftQty(1);
                 setEncounterId("");
                 setStatus("UNPAID");
                 setShowForm(false);
@@ -629,16 +826,25 @@ export default function InvoicePage() {
                   </button>
                   {inv.status !== "PAID" && inv.status !== "CANCELLED" && (
                     <>
-                      <button className="btn btn-secondary btn-sm" style={{ border: "1px solid var(--color-warning, #eab308)", color: "var(--color-warning, #eab308)" }} onClick={() => handleEditSelect(inv)}>
-                        <Pencil size={14} style={{ marginRight: "1px", verticalAlign: "text-bottom" }} />
-                        Edit
-                      </button>
+                      {!inv.lineItemsJson?.includes("PHARMACY_DISPENSE") ? (
+                        <button className="btn btn-secondary btn-sm" style={{ border: "1px solid var(--color-warning, #eab308)", color: "var(--color-warning, #eab308)" }} onClick={() => handleEditSelect(inv)}>
+                          <Pencil size={14} style={{ marginRight: "1px", verticalAlign: "text-bottom" }} />
+                          Edit
+                        </button>
+                      ) : (
+                        <button className="btn btn-secondary btn-sm" style={{ visibility: "hidden" }} aria-hidden="true" tabIndex={-1}>
+                          <Pencil size={14} style={{ marginRight: "1px", verticalAlign: "text-bottom" }} />
+                          Edit
+                        </button>
+                      )}
                       <button className="btn btn-primary btn-sm" onClick={() => handlePaySelect(inv)}>
                         Record Payment
                       </button>
-                      <button className="btn btn-danger btn-sm" onClick={() => handleVoid(inv.invoiceId)}>
-                        <Trash2 size={14} style={{ verticalAlign: "text-bottom" }} />
-                      </button>
+                      {canDeleteInvoice && (
+                        <button className="btn btn-danger btn-sm" onClick={() => handleVoid(inv.invoiceId)}>
+                          <Trash2 size={14} style={{ verticalAlign: "text-bottom" }} />
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -688,18 +894,34 @@ export default function InvoicePage() {
                       type="text"
                       inputMode="decimal"
                       pattern="[0-9]*\.?[0-9]*"
-                      value={paymentAmount || ""}
+                      max={maxPayableAmount}
+                      value={isMedicineDispenseInvoice && selectedPaymentInvoice ? getRemainingAmount(selectedPaymentInvoice) : (paymentAmount || "")}
                       onChange={(e) => {
+                        if (isMedicineDispenseInvoice) return;
                         const value = e.target.value;
                         if (value === "") {
                           setPaymentAmount(0);
                           return;
                         }
                         if (!/^\d*\.?\d*$/.test(value)) return;
-                        setPaymentAmount(Number(value));
+                        const parsedValue = Number(value);
+                        if (parsedValue > maxPayableAmount) return;
+                        setPaymentAmount(parsedValue);
                       }}
+                      readOnly={isMedicineDispenseInvoice}
+                      style={isMedicineDispenseInvoice ? { background: "var(--color-border-light)", cursor: "not-allowed" } : undefined}
                       required
                     />
+                    {isMedicineDispenseInvoice && (
+                      <div style={{ marginTop: "6px", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                        For dispensed medicine invoices, payment amount is locked to full remaining balance.
+                      </div>
+                    )}
+                    {!isMedicineDispenseInvoice && (
+                      <div style={{ marginTop: "6px", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                        Maximum payable amount: {money(maxPayableAmount)}
+                      </div>
+                    )}
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
@@ -720,7 +942,7 @@ export default function InvoicePage() {
                 </div>
 
                 <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
-                  <button type="submit" className="btn btn-primary" disabled={paymentAmount <= 0}>Record Payment</button>
+                  <button type="submit" className="btn btn-primary" disabled={paymentAmount <= 0 || (!isMedicineDispenseInvoice && paymentAmount > maxPayableAmount)}>Record Payment</button>
                   <button type="button" className="btn btn-secondary" onClick={closePaymentForm}>Cancel</button>
                 </div>
               </form>
@@ -882,16 +1104,50 @@ export default function InvoicePage() {
                   <span>Tax:</span>
                   <span>{money(selectedInvoice.taxes)}</span>
                 </div>
-                {selectedInvoice.discounts > 0 && (
-                  <div className="receipt-summary-row" style={{ color: "var(--color-danger)" }}>
-                    <span>Discount:</span>
-                    <span>-{money(selectedInvoice.discounts)}</span>
-                  </div>
-                )}
+                <div className="receipt-summary-row" style={{ color: "var(--color-danger)" }}>
+                  <span>Paid (Deducted):</span>
+                  <span>-{money(getAlreadyPaid(selectedInvoice.invoiceId))}</span>
+                </div>
+                <div className="receipt-summary-row">
+                  <span>Remaining:</span>
+                  <span>{money(getRemainingAmount(selectedInvoice))}</span>
+                </div>
                 <div className="receipt-summary-row total">
                   <span>Total Amount:</span>
                   <span>{money(selectedInvoice.totalAmount)}</span>
                 </div>
+              </div>
+
+              <div style={{ marginTop: "16px" }}>
+                <h4 style={{ marginBottom: "10px", fontSize: "14px", fontWeight: 600 }}>Payment Deductions (This Invoice)</h4>
+                <table className="receipt-table">
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left" }}>Payment Ref</th>
+                      <th style={{ textAlign: "left" }}>Method</th>
+                      <th style={{ textAlign: "left" }}>Paid At</th>
+                      <th style={{ textAlign: "right" }}>Deducted</th>
+                      <th style={{ textAlign: "right" }}>Remaining</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {getInvoiceDeductionRows(selectedInvoice).length === 0 ? (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: "center", color: "var(--color-text-secondary)" }}>No payments recorded for this invoice yet.</td>
+                      </tr>
+                    ) : (
+                      getInvoiceDeductionRows(selectedInvoice).map((entry) => (
+                        <tr key={entry.paymentId}>
+                          <td>#{entry.paymentId}</td>
+                          <td>{entry.method}</td>
+                          <td>{date(entry.paidAt)}</td>
+                          <td style={{ textAlign: "right", color: "var(--color-danger)", fontWeight: 700 }}>-{money(entry.amount)}</td>
+                          <td style={{ textAlign: "right", fontWeight: 700 }}>{money(entry.remaining)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
 
               <div className="receipt-footer">

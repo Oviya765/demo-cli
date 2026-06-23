@@ -24,6 +24,29 @@ export async function getAllMedications(): Promise<MedicationResponseDto[]> {
 }
 
 /**
+ * POST /api/v1/medications
+ */
+export async function createMedication(data: any): Promise<MedicationResponseDto> {
+  try {
+    const response = await api.post<MedicationResponseDto>('/api/v1/medications', data);
+    return response.data;
+  } catch (err: any) {
+    throw new Error(err.response?.data?.message || 'Failed to create medication');
+  }
+}
+
+/**
+ * DELETE /api/v1/medications/{medId}
+ */
+export async function deleteMedication(medId: number): Promise<void> {
+  try {
+    await api.delete(`/api/v1/medications/${medId}`);
+  } catch (err: any) {
+    throw new Error(err.response?.data?.message || 'Failed to delete medication');
+  }
+}
+
+/**
  * GET /api/v1/pharmacist/inventory
  */
 export async function getAllInventory(): Promise<InventoryResponseDto[]> {

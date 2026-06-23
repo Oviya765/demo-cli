@@ -32,14 +32,14 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'Overview',
     items: [
-      { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={20} />, roles: ['ADMIN', 'CLINICIAN', 'RECEPTION', 'PHARMACIST', 'LAB_TECHNICIAN', 'FINANCE_OFFICER', 'CLINIC_MANAGER', 'PATIENT'] },
+      { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={20} />, roles: ['ADMIN', 'CLINICIAN', 'RECEPTION', 'PHARMACIST', 'LAB_TECHNICIAN', 'FINANCE_OFFICER', 'PATIENT'] },
     ],
   },
   {
     title: 'Clinical',
     items: [
-      { label: 'Patients', path: '/patients', icon: <Users size={20} />, roles: ['ADMIN', 'CLINICIAN', 'RECEPTION', 'CLINIC_MANAGER'] },
-      { label: 'Appointments', path: '/appointments', icon: <CalendarDays size={20} />, roles: ['ADMIN', 'CLINICIAN', 'RECEPTION', 'CLINIC_MANAGER', 'PATIENT'] },
+      { label: 'Patients', path: '/patients', icon: <Users size={20} />, roles: ['ADMIN', 'CLINICIAN', 'RECEPTION'] },
+      { label: 'Appointments', path: '/appointments', icon: <CalendarDays size={20} />, roles: ['ADMIN', 'CLINICIAN', 'RECEPTION', 'PATIENT'] },
       { label: 'Encounters', path: '/encounters', icon: <Stethoscope size={20} />, roles: ['ADMIN', 'CLINICIAN'] },
       { label: 'Prescriptions', path: '/prescriptions', icon: <Pill size={20} />, roles: ['ADMIN', 'CLINICIAN', 'PATIENT'] },
     ],
@@ -48,25 +48,26 @@ const navSections: { title: string; items: NavItem[] }[] = [
     title: 'Diagnostics',
     items: [
       { label: 'Lab Orders', path: '/lab', icon: <FlaskConical size={20} />, roles: ['ADMIN', 'CLINICIAN', 'LAB_TECHNICIAN'] },
+      { label: 'Lab Results', path: '/lab', icon: <FlaskConical size={20} />, roles: ['PATIENT'] },
     ],
   },
   {
     title: 'Pharmacy',
     items: [
-      { label: 'Dispensing', path: '/pharmacy', icon: <Activity size={20} />, roles: ['ADMIN', 'PHARMACIST', 'CLINICIAN'] },
-      { label: 'Inventory', path: '/inventory', icon: <Package size={20} />, roles: ['ADMIN', 'PHARMACIST', 'CLINIC_MANAGER'] },
+      { label: 'Dispensing', path: '/pharmacy', icon: <Activity size={20} />, roles: ['ADMIN', 'PHARMACIST'] },
+      { label: 'Inventory', path: '/inventory', icon: <Package size={20} />, roles: ['ADMIN', 'PHARMACIST'] },
     ],
   },
   {
     title: 'Finance',
     items: [
-      { label: 'Invoices', path: '/invoices', icon: <FileText size={20} />, roles: ['ADMIN', 'FINANCE_OFFICER', 'CLINIC_MANAGER', 'RECEPTION'] },
+      { label: 'Invoices', path: '/invoices', icon: <FileText size={20} />, roles: ['ADMIN', 'FINANCE_OFFICER', 'RECEPTION'] },
     ],
   },
   {
     title: 'Management',
     items: [
-      { label: 'Reports', path: '/reports', icon: <BarChart3 size={20} />, roles: ['ADMIN', 'CLINIC_MANAGER', 'FINANCE_OFFICER'] },
+      { label: 'Reports', path: '/reports', icon: <BarChart3 size={20} />, roles: ['ADMIN', 'FINANCE_OFFICER'] },
       { label: 'Users', path: '/admin/users', icon: <Shield size={20} />, roles: ['ADMIN'] },
     ],
   },

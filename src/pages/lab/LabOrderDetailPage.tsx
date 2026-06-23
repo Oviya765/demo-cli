@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { getOrderById, createLabResult, deleteLabResult } from '../../services/labService';
-import type { LabOrderResponseDto, LabResultFlag } from '../../models/types';
+import { getOrderById, createLabResult, deleteLabResult, getResultsByOrderId } from '../../services/labService';
+import { getPatientById } from '../../services/patientService';
+import { downloadLabReport, parseRefRange as parseRefRangeUtil } from '../../utils/labReport';
+import type { LabOrderResponseDto, LabResultFlag, PatientResponseDto } from '../../models/types';
 import {
   ArrowLeft,
   FlaskConical,
@@ -13,7 +15,8 @@ import {
   AlertTriangle,
   Beaker,
   CheckCircle,
-  Clock
+  Clock,
+  Download
 } from 'lucide-react';
 import MrnLabel from '../../components/ui/MrnLabel';
 import { toast } from 'react-hot-toast';
@@ -25,8 +28,10 @@ export default function LabOrderDetailPage() {
   const { user } = useAuth();
 
   const [order, setOrder] = useState<LabOrderResponseDto | null>(null);
+  const [patient, setPatient] = useState<PatientResponseDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // Result Form States
   const [testCode, setTestCode] = useState('');
@@ -45,29 +50,44 @@ export default function LabOrderDetailPage() {
     try {
       const data = await getOrderById(Number(id));
       
-      // Access Control: reported details can only be viewed by Clinicians.
-      // Technicians can access during COLLECTED phase to publish results.
+      // Access Control: Allow Clinicians, Lab Technicians, and Admins to view order details.
+      // Patients may view their OWN reported results (backend enforces ownership).
       const isReported = data.status === 'RESULTS_REPORTED' || data.status === 'CRITICAL_REPORTED';
       const isTechnician = user?.role === 'LAB_TECHNICIAN';
       const isClinician = user?.role === 'CLINICIAN';
+      const isAdmin = user?.role === 'ADMIN';
+      const isPatient = user?.role === 'PATIENT';
       
       if (isReported) {
-        if (!isClinician) {
-          toast.error('Access restricted. Only clinicians can view reported lab results.');
+        if (!isClinician && !isTechnician && !isAdmin && !isPatient) {
+          toast.error('Access restricted. You are not authorized to view these lab results.');
           navigate('/lab');
           return;
         }
+      } else if (isPatient) {
+        // Patients can only see reported results, not in-progress orders.
+        toast.error('Results for this lab order have not been published yet.');
+        navigate('/lab');
+        return;
+      } else if (data.status === 'COLLECTED' && (isTechnician || isClinician || isAdmin)) {
+        // OK: Technician is updating results, or clinician/admin viewing
+      } else if (data.status === 'ORDERED' && (isTechnician || isClinician || isAdmin)) {
+        // OK: Viewing ordered status
       } else {
-        if (data.status === 'COLLECTED' && isTechnician) {
-          // OK: Technician is updating results
-        } else {
-          toast.error('Details are only available once results are reported.');
-          navigate('/lab');
-          return;
-        }
+        toast.error('You do not have access to view this lab order.');
+        navigate('/lab');
+        return;
       }
 
       setOrder(data);
+
+      // Best-effort fetch of patient demographics to enrich the printed report.
+      try {
+        const p = await getPatientById(data.patientId);
+        setPatient(p);
+      } catch {
+        setPatient(null);
+      }
       
       // Auto-set the first test code from ordered list in form
       const tests = parseTests(data.testsJson);
@@ -112,20 +132,44 @@ export default function LabOrderDetailPage() {
       });
 
       toast.success('Lab result reported successfully!');
-      
-      // Reset result inputs
-      setValue('');
-      setUnits('');
-      setRefMin('');
-      setRefMax('');
-      setFlag('NORMAL');
-      
-      // Refresh details
-      loadOrderDetails();
+      navigate('/lab');
     } catch (err: any) {
       toast.error(err.message || 'Failed to save lab result');
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleDownloadReport = async () => {
+    if (!order) return;
+    setDownloading(true);
+    try {
+      // Prefer detailed results (with reference ranges) from the dedicated endpoint;
+      // fall back to the summary results embedded in the order.
+      let detailed: any[] = [];
+      try {
+        detailed = await getResultsByOrderId(order.labOrderId);
+      } catch {
+        detailed = [];
+      }
+
+      const results = (detailed.length ? detailed : order.results || []).map((r: any) => ({
+        testCode: r.testCode,
+        value: r.value,
+        units: r.units,
+        referenceRange: parseRefRangeUtil(r.referenceRangeJson),
+        flag: r.flag,
+        reportedAt: r.reportedAt,
+      }));
+
+      const ok = downloadLabReport({ order, patient, results });
+      if (!ok) {
+        toast.error('Popup blocked. Please allow popups to download the report.');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate report');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -240,6 +284,7 @@ export default function LabOrderDetailPage() {
   const testsList = parseTests(order.testsJson);
   const isTechnician = user?.role === 'LAB_TECHNICIAN';
   const isAdmin = user?.role === 'ADMIN';
+  const isReported = order.status === 'RESULTS_REPORTED' || order.status === 'CRITICAL_REPORTED';
 
   return (
     <div>
@@ -257,6 +302,18 @@ export default function LabOrderDetailPage() {
             <p>Patient: <strong>{order.patientName}</strong> (MRN: <MrnLabel patientId={order.patientId} />)</p>
           </div>
         </div>
+
+        {isReported && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleDownloadReport}
+            disabled={downloading}
+            title="Download lab report"
+          >
+            <Download size={16} /> {downloading ? 'Preparing...' : 'Download Report'}
+          </button>
+        )}
       </div>
 
       <div className="dashboard-grid" style={{ gridTemplateColumns: isTechnician && order.status !== 'CANCELLED' ? '3fr 2fr' : '1fr', gap: '32px' }}>

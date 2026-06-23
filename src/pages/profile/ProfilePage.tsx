@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyProfile, registerPatient, updatePatient } from '../../services/patientService';
 import { updateUser } from '../../services/adminUserService';
-import { changePassword } from '../../services/authService';
 import type { PatientResponseDto, PatientRequestDto } from '../../models/types';
 import {
   User,
@@ -125,9 +124,6 @@ export default function ProfilePage() {
             ...(password.trim() ? { password } : {})
           };
           await updateUser(user.userId, payload);
-        } else if (password.trim()) {
-          // If staff changes password, save persistently to backend
-          await changePassword(password);
         }
 
         // Refresh frontend auth context / session info

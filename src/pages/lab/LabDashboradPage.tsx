@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { getAllOrders, collectSample, cancelLabOrder } from '../../services/labService';
+import { getAllOrders, getOrdersByPatientId, collectSample, cancelLabOrder } from '../../services/labService';
+import { getMyProfile } from '../../services/patientService';
 import type { LabOrderResponseDto } from '../../models/types';
 import { toast } from 'react-hot-toast';
 import {
@@ -43,7 +44,13 @@ export default function LabDashboardPage() {
   const loadOrders = async () => {
     setLoading(true);
     try {
-      const data = await getAllOrders();
+      let data: LabOrderResponseDto[];
+      if (user?.role === 'PATIENT') {
+        const profile = await getMyProfile();
+        data = profile ? await getOrdersByPatientId(profile.patientId) : [];
+      } else {
+        data = await getAllOrders();
+      }
       setOrders(data);
     } catch (err: any) {
       toast.error(err.message || 'Failed to load lab orders');

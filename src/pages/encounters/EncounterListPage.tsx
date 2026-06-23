@@ -2,17 +2,22 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAllEncounters } from '../../services/encounterService';
 import type { EncounterResponseDto } from '../../models/types';
-import { Plus, Search, Stethoscope } from 'lucide-react';
-import { getPatientMrnSync } from '../../services/patientService';
+import { Plus, Search, Stethoscope, Eye } from 'lucide-react';
+import { fetchMrnByPatientId } from '../../services/patientService';
 import { useAuth } from '../../contexts/AuthContext';
+import { Pagination } from '../../components/ui/components';
 import '../../assets/styles/encounters/encounter.css';
 
 export default function EncounterListPage() {
   const { user } = useAuth();
   const [encounters, setEncounters] = useState<EncounterResponseDto[]>([]);
+  const [mrnMap, setMrnMap] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [showMineOnly, setShowMineOnly] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -23,11 +28,20 @@ export default function EncounterListPage() {
     try {
       const data = await getAllEncounters();
       setEncounters(data);
+      loadMrns(data);
     } catch (err) {
       console.error('Failed to load encounters', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadMrns = async (data: EncounterResponseDto[]) => {
+    const uniqueIds = Array.from(new Set(data.map(enc => enc.patientId)));
+    const entries = await Promise.all(
+      uniqueIds.map(async (pid) => [pid, await fetchMrnByPatientId(pid)] as const)
+    );
+    setMrnMap(Object.fromEntries(entries));
   };
 
   const filtered = encounters.filter(enc => {
@@ -36,8 +50,15 @@ export default function EncounterListPage() {
       enc.chiefComplaint.toLowerCase().includes(search.toLowerCase()) ||
       enc.clinicianName.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === 'ALL' || enc.status === statusFilter;
-    return matchSearch && matchStatus;
+    const matchMine = !showMineOnly || enc.clinicianId === user?.userId;
+    return matchSearch && matchStatus && matchMine;
   });
+
+  // Reset to page 1 when filters change
+  useEffect(() => { setCurrentPage(1); }, [search, statusFilter, showMineOnly]);
+
+  const totalPages = Math.ceil(filtered.length / itemsPerPage);
+  const paginatedData = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const getStatusBadge = (status: string) => {
     const map: Record<string, { cls: string; label: string }> = {
@@ -96,12 +117,21 @@ export default function EncounterListPage() {
         {['ALL', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].map(status => (
           <button
             key={status}
-            className={`filter-chip ${statusFilter === status ? 'active' : ''}`}
-            onClick={() => setStatusFilter(status)}
+            className={`filter-chip ${statusFilter === status && !showMineOnly ? 'active' : ''}`}
+            onClick={() => { setStatusFilter(status); setShowMineOnly(false); }}
           >
             {status === 'ALL' ? 'All' : status.replace('_', ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())}
           </button>
         ))}
+        {user?.role === 'CLINICIAN' && (
+          <button
+            className={`filter-chip ${showMineOnly ? 'active' : ''}`}
+            onClick={() => { setShowMineOnly(true); setStatusFilter('ALL'); }}
+            style={{ marginLeft: '8px' }}
+          >
+            My Encounters
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -117,21 +147,22 @@ export default function EncounterListPage() {
           )}
         </div>
       ) : (
+        <>
         <div className="data-table-wrapper">
           <table className="data-table">
             <thead>
               <tr>
                 <th>Patient</th>
                 <th>Visit Type</th>
-                <th>Chief Complaint</th>
                 <th>Clinician</th>
                 <th>Date</th>
                 <th>Time</th>
                 <th>Status</th>
+                <th style={{ textAlign: 'center' }}>Action</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(enc => (
+              {paginatedData.map(enc => (
                 <tr
                   key={enc.encounterId}
                   className="clickable-row"
@@ -139,23 +170,39 @@ export default function EncounterListPage() {
                 >
                   <td>
                     <div className="cell-main">{enc.patientName}</div>
-                    <div className="cell-sub">MRN: {getPatientMrnSync(enc.patientId)}</div>
+                    <div className="cell-sub">MRN: {mrnMap[enc.patientId] ?? '…'}</div>
                   </td>
                   <td>
                     <span className="badge badge-primary">{enc.visitType}</span>
-                  </td>
-                  <td style={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {enc.chiefComplaint}
                   </td>
                   <td>{enc.clinicianName}</td>
                   <td>{formatDate(enc.startAt)}</td>
                   <td>{formatTime(enc.startAt)}</td>
                   <td>{getStatusBadge(enc.status)}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button
+                      className="btn btn-ghost btn-icon"
+                      style={{ padding: '4px', minWidth: 'auto', height: 'auto', color: 'var(--color-primary)' }}
+                      onClick={(e) => { e.stopPropagation(); navigate(`/encounters/${enc.encounterId}`); }}
+                      title="View details"
+                    >
+                      <Eye size={16} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filtered.length}
+          itemsPerPage={itemsPerPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(val) => { setItemsPerPage(val); setCurrentPage(1); }}
+        />
+        </>
       )}
     </div>
   );

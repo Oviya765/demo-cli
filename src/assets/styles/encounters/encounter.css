@@ -597,6 +597,12 @@
   white-space: nowrap;
 }
 
+.detail-actions-row .btn svg {
+  flex-shrink: 0;
+  min-width: 16px;
+  min-height: 16px;
+}
+
 /* Redesigned Premium Segmented Tabs */
 .encounter-tabs-bar {
   display: flex;
@@ -639,18 +645,12 @@
   border: none;
 }
 
-/* Overview Split Columns */
+/* Overview Layout */
 .overview-layout {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr;
   gap: 24px;
   align-items: start;
-}
-
-@media (max-width: 1024px) {
-  .overview-layout {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* Chief Complaint Card */

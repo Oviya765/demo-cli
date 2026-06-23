@@ -4,10 +4,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { 
   createAppointment, 
   getClinicians, 
-  getClinicianAppointments, 
+  getClinicianAppointments,
+  getAppointmentsByPatient,
   type Clinician 
 } from '../../services/appointmentService';
-import { searchPatients, getMyProfile, getPatientByMrn, getCachedPatientProfile } from '../../services/patientService';
+import { searchPatients, getMyProfile, getPatientByMrn } from '../../services/patientService';
 import type { PatientResponseDto, AppointmentResponseDto, AppointmentRequestDto } from '../../models/types';
 import { ArrowLeft, Save, User, Search, Heart } from 'lucide-react';
 import { toast } from 'react-hot-toast';
@@ -58,7 +59,7 @@ export default function AppointmentFormPage() {
     } else {
       setBookedAppointments([]);
     }
-  }, [clinicianId, bookingDate]);
+  }, [clinicianId, bookingDate, selectedPatient?.patientId]);
 
   const loadClinicians = async () => {
     try {
@@ -75,12 +76,6 @@ export default function AppointmentFormPage() {
 
   const loadPatientProfileIfPatient = async () => {
     if (user && user.role === 'PATIENT') {
-      const cached = getCachedPatientProfile();
-      if (cached?.patientId && cached.status === 'ACTIVE') {
-        setSelectedPatient(cached);
-        setPatientMrn(cached.mrn);
-      }
-
       try {
         const profile = await getMyProfile();
         if (profile) {
@@ -92,11 +87,9 @@ export default function AppointmentFormPage() {
         console.error('Failed to load patient profile', err);
       }
 
-      if (!cached?.patientId || cached.status !== 'ACTIVE') {
-        setPatientError('Complete your patient registry first to schedule appointments.');
-        toast.error('Complete your patient registry to proceed.');
-        navigate('/dashboard');
-      }
+      setPatientError('Complete your patient registry first to schedule appointments.');
+      toast.error('Complete your patient registry to proceed.');
+      navigate('/dashboard');
     }
   };
 
@@ -106,6 +99,18 @@ export default function AppointmentFormPage() {
       const from = `${bookingDate}T00:00:00`;
       const to = `${bookingDate}T23:59:59`;
       const data = await getClinicianAppointments(Number(clinicianId), from, to);
+      
+      // Add patient's existing appointments on this date to the blocked list
+      if (selectedPatient?.patientId) {
+        const patientAppts = await getAppointmentsByPatient(selectedPatient.patientId);
+        const patientOnThisDate = patientAppts.filter(a => {
+          const apptDate = a.startAt.split('T')[0];
+          return apptDate === bookingDate && !['CANCELLED', 'NO_SHOW'].includes(a.status);
+        });
+        // Merge patient's appointments with clinician's
+        data.push(...patientOnThisDate);
+      }
+      
       setBookedAppointments(data);
       setBookingTime(''); // Reset selected time slot
     } catch (err: any) {
@@ -190,6 +195,18 @@ export default function AppointmentFormPage() {
     return `${dateStr}T${timeStr}:00`;
   };
 
+  const hasTimeOverlap = (startAt: string, endAt: string, appointments: AppointmentResponseDto[]) => {
+    const requestedStart = new Date(startAt);
+    const requestedEnd = new Date(endAt);
+
+    return appointments.some(appt => {
+      if (appt.status === 'CANCELLED' || appt.status === 'NO_SHOW') return false;
+      const apptStart = new Date(appt.startAt);
+      const apptEnd = new Date(appt.endAt);
+      return apptStart < requestedEnd && apptEnd > requestedStart;
+    });
+  };
+
   // Helper to check if a specific slot is booked (overlapping)
   const isSlotBooked = (timeStr: string) => {
     if (!bookingDate) return false;
@@ -252,6 +269,13 @@ export default function AppointmentFormPage() {
       const pad = (n: number) => n.toString().padStart(2, '0');
       const endAtStr = `${endDate.getFullYear()}-${pad(endDate.getMonth() + 1)}-${pad(endDate.getDate())}T${pad(endDate.getHours())}:${pad(endDate.getMinutes())}:00`;
 
+      // Fresh guard at submit time to prevent same-patient double-booking with any clinician.
+      const patientAppointments = await getAppointmentsByPatient(selectedPatient.patientId);
+      if (hasTimeOverlap(startAtStr, endAtStr, patientAppointments)) {
+        toast.error('This patient already has an appointment in the selected time slot.');
+        return;
+      }
+
       const payload: AppointmentRequestDto = {
         patientId: selectedPatient.patientId,
         clinicianId: Number(clinicianId),
@@ -269,7 +293,6 @@ export default function AppointmentFormPage() {
         const clinician = clinicians.find(x => x.userId === Number(clinicianId));
         if (clinician) (created as any).clinicianName = clinician.name;
       } catch {}
-      try { localStorage.setItem('clinic_flow_new_appointment', JSON.stringify(created)); } catch {}
       toast.success('Appointment booked successfully!');
       navigate('/appointments');
     } catch (err: any) {
@@ -302,16 +325,19 @@ export default function AppointmentFormPage() {
       </div>
 
       <form onSubmit={handleSubmit}>
-        <div className="dashboard-grid">
+        <div className="apptf-grid">
           {/* Column Left: Patient Select & Doctor search directory */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+          <div className="apptf-col">
             
             {/* Patient Select Card */}
-            <div className="card">
-              <div className="card-header">
-                <h3>Patient Demographics</h3>
+            <div className="apptf-card apptf-card-patient">
+              <div className="apptf-card-header">
+                <h3 className="apptf-card-title">
+                  <span className="apptf-title-icon"><User size={16} /></span>
+                  Patient Demographics
+                </h3>
               </div>
-              <div className="card-body" style={{ padding: '16px 0 0' }}>
+              <div className="apptf-card-body">
                 <div className="form-group" style={{ position: 'relative' }}>
                   <label className="form-label">Patient MRN or Name <span className="required">*</span></label>
                   <div className="autocomplete-container">
@@ -378,13 +404,13 @@ export default function AppointmentFormPage() {
             </div>
 
             {/* Doctor search grid list */}
-            <div className="card">
-              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', paddingBottom: '16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Heart size={18} style={{ color: 'var(--color-danger)' }} />
+            <div className="apptf-card">
+              <div className="apptf-card-header">
+                <h3 className="apptf-card-title">
+                  <span className="apptf-title-icon is-danger"><Heart size={16} /></span>
                   Select Doctor
                 </h3>
-                <div className="header-search search-input" style={{ width: '220px', margin: 0 }}>
+                <div className="header-search search-input apptf-doctor-search">
                   <Search size={16} className="search-icon" />
                   <input 
                     type="text" 
@@ -394,46 +420,39 @@ export default function AppointmentFormPage() {
                   />
                 </div>
               </div>
-              <div className="card-body" style={{ padding: '20px 0 0', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '380px', overflowY: 'auto' }}>
-                {filteredClinicians.length === 0 ? (
-                  <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>No doctors found.</p>
-                ) : (
-                  filteredClinicians.map(c => (
-                    <div
-                      key={c.userId}
-                      onClick={() => handleClinicianSelect(c)}
-                      style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        padding: '12px 16px', 
-                        background: clinicianId === c.userId ? 'rgba(6, 182, 212, 0.08)' : 'var(--color-surface)',
-                        border: clinicianId === c.userId ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
-                        borderRadius: '8px', 
-                        cursor: 'pointer',
-                        gap: '12px',
-                        transition: 'all 0.2s ease'
-                      }}
-                    >
-                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: clinicianId === c.userId ? 'var(--color-primary)' : 'var(--color-surface-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, color: clinicianId === c.userId ? '#ffffff' : 'var(--color-text)', fontSize: '0.75rem' }}>
-                        Dr
+              <div className="apptf-card-body">
+                <div className="apptf-doctor-list">
+                  {filteredClinicians.length === 0 ? (
+                    <p className="apptf-empty">No doctors found.</p>
+                  ) : (
+                    filteredClinicians.map(c => (
+                      <div
+                        key={c.userId}
+                        onClick={() => handleClinicianSelect(c)}
+                        className={`apptf-doctor${clinicianId === c.userId ? ' is-selected' : ''}`}
+                      >
+                        <div className="apptf-doctor-avatar">Dr</div>
+                        <div className="apptf-doctor-info">
+                          <div className="apptf-doctor-name">{c.name}</div>
+                          <div className="apptf-doctor-dept">{c.department}</div>
+                        </div>
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.85rem', color: clinicianId === c.userId ? 'var(--color-primary)' : 'var(--color-text)' }}>{c.name}</div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--color-text-secondary)' }}>{c.department}</div>
-                      </div>
-                    </div>
-                  ))
-                )}
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>
 
           {/* Column Right: Date and interactive Slot Booking Grid */}
-          <div className="card">
-            <div className="card-header">
-              <h3>Date & Availability Slots</h3>
+          <div className="apptf-card">
+            <div className="apptf-card-header">
+              <h3 className="apptf-card-title">
+                <span className="apptf-title-icon"><Search size={16} /></span>
+                Date &amp; Availability Slots
+              </h3>
             </div>
-            <div className="card-body" style={{ padding: '16px 0 0' }}>
+            <div className="apptf-card-body">
               <div className="form-row" style={{ marginBottom: '24px' }}>
                 {/* Date Selection */}
                 <div className="form-group">
@@ -484,11 +503,11 @@ export default function AppointmentFormPage() {
                 </label>
 
                 {!bookingDate ? (
-                  <div style={{ textAlign: 'center', padding: '24px', background: 'rgba(255,255,255,0.01)', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '8px', color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>
+                  <div className="apptf-slot-placeholder">
                     Choose a date to review doctor availability slots
                   </div>
                 ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+                  <div className="apptf-slots-grid">
                     {TIME_SLOTS.map(slot => {
                       const booked = isSlotBooked(slot);
                       const isSelected = bookingTime === slot;
@@ -498,30 +517,7 @@ export default function AppointmentFormPage() {
                           type="button"
                           disabled={booked}
                           onClick={() => setBookingTime(slot)}
-                          style={{
-                            padding: '10px 8px',
-                            borderRadius: '6px',
-                            border: isSelected 
-                              ? '1px solid var(--color-primary)' 
-                              : booked 
-                                ? '1px solid rgba(239, 68, 68, 0.15)' 
-                                : '1px solid rgba(255, 255, 255, 0.05)',
-                            background: isSelected 
-                              ? 'rgba(6, 182, 212, 0.15)' 
-                              : booked 
-                                ? 'rgba(239, 68, 68, 0.05)' 
-                                : 'rgba(255, 255, 255, 0.02)',
-                            color: isSelected 
-                              ? 'var(--color-primary)' 
-                              : booked 
-                                ? '#ef4444' 
-                                : '#e2e8f0',
-                            fontSize: '0.8rem',
-                            fontWeight: 600,
-                            cursor: booked ? 'not-allowed' : 'pointer',
-                            textDecoration: booked ? 'line-through' : 'none',
-                            transition: 'all 0.15s ease'
-                          }}
+                          className={`apptf-slot${isSelected ? ' is-selected' : ''}${booked ? ' is-booked' : ''}`}
                         >
                           {slot}
                         </button>
@@ -535,7 +531,7 @@ export default function AppointmentFormPage() {
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
+        <div className="apptf-actions">
           <button type="button" className="btn btn-secondary" onClick={() => navigate('/appointments')}>
             Cancel
           </button>

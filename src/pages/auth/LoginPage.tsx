@@ -5,7 +5,7 @@ import { login, register } from '../../services/authService';
 import type { UserRole } from '../../models/types';
 import { Mail, Lock, User, Phone, Eye, EyeOff, Stethoscope, AlertCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { validatePassword } from '../../utils/validation';
+import { validatePassword, validateEmail } from '../../utils/validation';
 import '../../assets/styles/auth/LoginPage.css';
 
 export default function LoginPage() {
@@ -62,6 +62,12 @@ export default function LoginPage() {
   const handleRegister = async (e: FormEvent) => {
     e.preventDefault();
     setRegError('');
+
+    const emailCheck = validateEmail(regEmail);
+    if (!emailCheck.isValid) {
+      setRegError(emailCheck.error || 'Invalid email address');
+      return;
+    }
 
     if (regPassword !== regConfirmPassword) {
       setRegError('Passwords do not match');

@@ -17,7 +17,6 @@ export type UserRole =
   | 'PHARMACIST'
   | 'LAB_TECHNICIAN'
   | 'FINANCE_OFFICER'
-  | 'CLINIC_MANAGER'
   | 'COMPLIANCE_OFFICER';
 
 // ── Auth ──
@@ -142,10 +141,10 @@ export interface EncounterResponseDto {
   notesJson: string;
   diagnosesJson: string;
   ordersJson: string;
-  prescriptionsJson: string;
   startAt: string;
   endAt: string;
   status: EncounterStatus;
+  appointmentId?: number;
   signedById: number;
   signedByName: string;
   signedAt: string;
@@ -159,7 +158,7 @@ export interface EncounterRequestDto {
   notesJson: string;
   diagnosesJson: string;
   ordersJson: string;
-  prescriptionsJson?: string;
+  appointmentId?: number;
   status?: EncounterStatus;
 }
 

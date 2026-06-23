@@ -6,13 +6,20 @@ import {
   getAllAppointments, 
   getAppointmentsByPatient, 
   checkInAppointment, 
-  completeAppointment, 
   cancelAppointment,
   getClinicians
 } from '../../services/appointmentService';
-import { getMyProfile, getCachedPatientProfile } from '../../services/patientService';
+import { getMyProfile } from '../../services/patientService';
+import { getAllEncounters } from '../../services/encounterService';
 import type { AppointmentResponseDto } from '../../models/types';
-import { CalendarDays, Plus, Search, Check, X } from 'lucide-react';
+import {
+  CalendarDays,
+  Plus,
+  Search,
+  Check,
+  X,
+  Stethoscope,
+} from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 export default function AppointmentListPage() {
@@ -21,7 +28,15 @@ export default function AppointmentListPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [currentPage, setCurrentPage] = useState(1);
   const navigate = useNavigate();
+  const PATIENT_ITEMS_PER_PAGE = 8;
+  const CLINICIAN_ITEMS_PER_PAGE = 8;
+  const DEFAULT_ITEMS_PER_PAGE = 8;
+  const AUTO_CANCEL_AFTER_MINUTES = 30;
+
+  const isAutoCancelRole = (role?: string) =>
+    role === 'RECEPTION' || role === 'ADMIN' || role === 'CLINICIAN';
 
   useEffect(() => {
     loadAppointments();
@@ -33,11 +48,8 @@ export default function AppointmentListPage() {
       setLoading(true);
 
       if (user.role === 'PATIENT') {
-        // Try cached profile first
-        let profile = getCachedPatientProfile();
-
         try {
-          if (!profile) profile = await getMyProfile();
+          const profile = await getMyProfile();
           if (profile) {
             let data = await getAppointmentsByPatient(profile.patientId);
             // Enrich clinician names from local clinicians list when possible
@@ -59,36 +71,38 @@ export default function AppointmentListPage() {
                 return a;
               });
             } catch {}
-            // Merge cached new appointment if present
-            try {
-              const cachedAppt = localStorage.getItem('clinic_flow_new_appointment');
-              if (cachedAppt) {
-                const a = JSON.parse(cachedAppt);
-                if (a && a.patientId === profile.patientId && !data.find(x => x.apptId === a.apptId)) {
-                  data.unshift(a);
-                }
-              }
-            } catch {}
             setAppointments(data);
           } else {
             setAppointments([]);
           }
         } catch (err) {
           console.error('Patient appointments fetch failed', err);
-          // Fallback to showing a cached new appointment if available
-          try {
-            const cachedAppt = localStorage.getItem('clinic_flow_new_appointment');
-            if (cachedAppt) {
-              const a = JSON.parse(cachedAppt);
-              if (a) setAppointments([a]);
-              return;
-            }
-          } catch {}
           throw err;
         }
       } else {
-        const data = await getAllAppointments();
-        setAppointments(data);
+        let data = await getAllAppointments();
+
+        if (isAutoCancelRole(user.role)) {
+          const cutoffTime = Date.now() - AUTO_CANCEL_AFTER_MINUTES * 60 * 1000;
+          const overdueScheduled = data.filter(appt => {
+            if (appt.status !== 'SCHEDULED') return false;
+            const startTime = new Date(appt.startAt).getTime();
+            if (Number.isNaN(startTime)) return false;
+            return startTime <= cutoffTime;
+          });
+
+          if (overdueScheduled.length > 0) {
+            await Promise.allSettled(overdueScheduled.map(appt => cancelAppointment(appt.apptId)));
+            data = await getAllAppointments();
+          }
+        }
+
+        // Clinicians should only see appointments booked with them
+        if (user.role === 'CLINICIAN') {
+          setAppointments(data.filter(a => a.clinicianId === user.userId));
+        } else {
+          setAppointments(data);
+        }
       }
     } catch (err: any) {
       console.error('Failed to load appointments', err);
@@ -110,17 +124,6 @@ export default function AppointmentListPage() {
     }
   };
 
-  const handleComplete = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await completeAppointment(id);
-      toast.success('Appointment marked as completed!');
-      loadAppointments();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to complete appointment');
-    }
-  };
-
   const handleCancel = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!window.confirm('Are you sure you want to cancel this appointment?')) return;
@@ -133,15 +136,76 @@ export default function AppointmentListPage() {
     }
   };
 
+  const handleNewEncounter = async (appt: AppointmentResponseDto, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (appt.status !== 'CHECKED_IN') {
+      toast.error('Only checked-in appointments can start an encounter');
+      return;
+    }
+
+    // Check if an in-progress encounter already exists for this patient
+    try {
+      const encounters = await getAllEncounters();
+      const existingEncounter = encounters.find(
+        enc => enc.patientId === appt.patientId && enc.status === 'IN_PROGRESS'
+      );
+
+      if (existingEncounter) {
+        toast('Existing encounter found — redirecting...', { icon: '📋' });
+        navigate(`/encounters/${existingEncounter.encounterId}?apptId=${appt.apptId}`);
+        return;
+      }
+    } catch (err) {
+      console.error('Failed to check existing encounters', err);
+    }
+
+    navigate(`/encounters/new?mrn=${encodeURIComponent(appt.patientMrn)}&apptId=${appt.apptId}`);
+  };
+
+  const handleViewEncounter = async (appt: AppointmentResponseDto, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const encounters = await getAllEncounters();
+      const patientEncounters = encounters
+        .filter(enc => enc.patientId === appt.patientId)
+        .sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime());
+
+      const target = patientEncounters[0];
+      if (!target) {
+        toast.error('No encounter found for this appointment yet');
+        return;
+      }
+
+      navigate(`/encounters/${target.encounterId}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to load encounter details');
+    }
+  };
+
   const filtered = appointments.filter(appt => {
     const matchSearch =
       appt.patientName.toLowerCase().includes(search.toLowerCase()) ||
-      appt.clinicianName.toLowerCase().includes(search.toLowerCase()) ||
-      appt.department.toLowerCase().includes(search.toLowerCase()) ||
       appt.serviceType.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === 'ALL' || appt.status === statusFilter;
     return matchSearch && matchStatus;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, statusFilter, user?.role]);
+
+  const shouldPaginate = true;
+  const itemsPerPage =
+    user?.role === 'PATIENT'
+      ? PATIENT_ITEMS_PER_PAGE
+      : user?.role === 'CLINICIAN'
+        ? CLINICIAN_ITEMS_PER_PAGE
+        : DEFAULT_ITEMS_PER_PAGE;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = (safePage - 1) * itemsPerPage;
+  const pageEnd = pageStart + itemsPerPage;
+  const paginatedAppointments = filtered.slice(pageStart, pageEnd);
 
   const getStatusBadge = (status: string) => {
     const map: Record<string, { cls: string; label: string }> = {
@@ -167,9 +231,23 @@ export default function AppointmentListPage() {
     return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   };
 
+  const isTodayAppointment = (dateStr: string) => {
+    const apptDate = new Date(dateStr);
+    if (Number.isNaN(apptDate.getTime())) return false;
+    const now = new Date();
+    return (
+      apptDate.getFullYear() === now.getFullYear() &&
+      apptDate.getMonth() === now.getMonth() &&
+      apptDate.getDate() === now.getDate()
+    );
+  };
+
   const isPatient = user?.role === 'PATIENT';
-  const isReception = user?.role === 'RECEPTION' || user?.role === 'ADMIN' || user?.role === 'CLINIC_MANAGER';
-  const isClinician = user?.role === 'CLINICIAN' || user?.role === 'ADMIN';
+  const isReception = user?.role === 'RECEPTION' || user?.role === 'ADMIN';
+  const isClinicianView = user?.role === 'CLINICIAN';
+  const statusOptions = isClinicianView
+    ? ['ALL', 'SCHEDULED', 'CHECKED_IN', 'COMPLETED', 'CANCELLED', 'NO_SHOW']
+    : ['ALL', 'SCHEDULED', 'CHECKED_IN', 'COMPLETED', 'CANCELLED'];
 
   if (loading) {
     return <div className="page-spinner"><div className="spinner"></div></div>;
@@ -199,12 +277,12 @@ export default function AppointmentListPage() {
           <Search className="search-icon" size={16} />
           <input
             type="text"
-            placeholder="Search patient, doctor, department..."
+            placeholder="Search patient or service type..."
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        {['ALL', 'SCHEDULED', 'CHECKED_IN', 'COMPLETED', 'CANCELLED'].map(status => (
+        {statusOptions.map(status => (
           <button
             key={status}
             className={`filter-chip ${statusFilter === status ? 'active' : ''}`}
@@ -223,87 +301,136 @@ export default function AppointmentListPage() {
           <p>Try adjusting your search filters or book a new appointment.</p>
         </div>
       ) : (
-        <div className="data-table-wrapper">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Patient</th>
-                <th>Doctor</th>
-                <th>Department</th>
-                <th>Service Type</th>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(appt => (
-                <tr key={appt.apptId}>
-                  <td>
-                    <div className="cell-main">{appt.patientName}</div>
-                    <div className="cell-sub">MRN: {appt.patientMrn}</div>
-                  </td>
-                  <td>
-                    <span className="appt-doctor-name">{appt.clinicianName}</span>
-                  </td>
-                  <td>{appt.department}</td>
-                  <td>
-                    <span className="badge badge-primary">{appt.serviceType}</span>
-                  </td>
-                  <td>{formatDate(appt.startAt)}</td>
-                  <td>{formatTime(appt.startAt)}</td>
-                  <td>{getStatusBadge(appt.status)}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      {/* Check-In Action: for scheduled appointments, allowed for Reception */}
-                      {appt.status === 'SCHEDULED' && isReception && (
-                        <button 
-                          className="btn btn-primary" 
-                          style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto' }}
-                          onClick={(e) => handleCheckIn(appt.apptId, e)}
-                          title="Check In Patient"
-                        >
-                          <Check size={14} style={{ marginRight: '4px' }} /> Check In
-                        </button>
-                      )}
-
-                      {/* Complete Action: for checked in appointments, allowed for Clinicians or Reception */}
-                      {appt.status === 'CHECKED_IN' && (isClinician || isReception) && (
-                        <button 
-                          className="btn btn-success" 
-                          style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto', background: 'var(--color-success)', borderColor: 'var(--color-success)', color: '#ffffff' }}
-                          onClick={(e) => handleComplete(appt.apptId, e)}
-                          title="Complete Appointment"
-                        >
-                          <Check size={14} style={{ marginRight: '4px' }} /> Complete
-                        </button>
-                      )}
-
-                      {/* Cancel Action: allowed for scheduled/checked-in if Patient (for their own) or Reception */}
-                      {(appt.status === 'SCHEDULED' || appt.status === 'CHECKED_IN') && (isReception || isPatient) && (
-                        <button 
-                          className="btn btn-danger" 
-                          style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto', background: 'transparent', color: 'var(--color-danger)', border: '1px solid var(--color-danger)' }}
-                          onClick={(e) => handleCancel(appt.apptId, e)}
-                          title="Cancel Appointment"
-                        >
-                          <X size={14} style={{ marginRight: '4px' }} /> Cancel
-                        </button>
-                      )}
-
-                      {/* Completed / Cancelled state placeholder */}
-                      {(appt.status === 'COMPLETED' || appt.status === 'CANCELLED' || appt.status === 'NO_SHOW') && (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', paddingLeft: '8px' }}>—</span>
-                      )}
-                    </div>
-                  </td>
+        <>
+          <div className="data-table-wrapper appointments-registry-table-wrapper">
+            <table className="data-table appointments-uniform-table appointments-realtime-table">
+              <thead>
+                <tr>
+                  <th>Patient</th>
+                  <th>Service Type</th>
+                  <th>Date</th>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {paginatedAppointments.map(appt => {
+                  const showCheckIn = appt.status === 'SCHEDULED' && isReception;
+                  const canCheckIn = showCheckIn && isTodayAppointment(appt.startAt);
+                  const canCancel = appt.status === 'SCHEDULED' && (isReception || isPatient);
+                  const canStartEncounter = appt.status === 'CHECKED_IN' && isClinicianView;
+                  const canViewEncounter = appt.status === 'COMPLETED' && isClinicianView;
+                  const hasAction = showCheckIn || canCancel || canStartEncounter || canViewEncounter;
+
+                  return (
+                    <tr key={appt.apptId}>
+                      <td>
+                        <div className="cell-main">{appt.patientName}</div>
+                        <div className="cell-sub">MRN: {appt.patientMrn}</div>
+                      </td>
+                      <td>
+                        <span className="badge badge-primary appointments-service-badge">{appt.serviceType}</span>
+                      </td>
+                      <td>{formatDate(appt.startAt)}</td>
+                      <td>{formatTime(appt.startAt)}</td>
+                      <td>{getStatusBadge(appt.status)}</td>
+                      <td>
+                        <div className="appointments-actions-wrap" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          {showCheckIn && (
+                            <button
+                              className="btn btn-primary appointments-action-btn"
+                              style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto' }}
+                              onClick={(e) => handleCheckIn(appt.apptId, e)}
+                              title={canCheckIn ? 'Check In Patient' : 'Check In is available only on appointment date'}
+                              disabled={!canCheckIn}
+                            >
+                              <Check size={14} style={{ marginRight: '4px' }} /> Check In
+                            </button>
+                          )}
+
+                          {canStartEncounter && (
+                            <button
+                              className="btn btn-primary appointments-action-btn"
+                              style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto' }}
+                              onClick={(e) => handleNewEncounter(appt, e)}
+                              title="Start Encounter"
+                            >
+                              <Stethoscope size={14} style={{ marginRight: '4px' }} /> Open Encounter
+                            </button>
+                          )}
+
+                          {canCancel && (
+                            <button
+                              className="btn btn-danger appointments-action-btn appointments-action-btn-danger"
+                              style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto', background: 'transparent', color: 'var(--color-danger)', border: '1px solid var(--color-danger)' }}
+                              onClick={(e) => handleCancel(appt.apptId, e)}
+                              title="Cancel Appointment"
+                            >
+                              <X size={14} style={{ marginRight: '4px' }} /> Cancel
+                            </button>
+                          )}
+
+                          {canViewEncounter && (
+                            <button
+                              className="btn btn-secondary appointments-action-btn"
+                              style={{ padding: '6px 10px', fontSize: '0.75rem', height: 'auto' }}
+                              onClick={(e) => handleViewEncounter(appt, e)}
+                              title="View Encounter"
+                            >
+                              View Encounter
+                            </button>
+                          )}
+
+                          {!hasAction && (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', paddingLeft: '8px' }}>—</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {shouldPaginate && totalPages > 1 && (
+            <div className="pagination-bar">
+              <span className="pagination-info">
+                Showing <strong>{filtered.length === 0 ? 0 : pageStart + 1}</strong> to <strong>{Math.min(pageEnd, filtered.length)}</strong> of <strong>{filtered.length}</strong> entries
+              </span>
+              <div className="pagination-buttons">
+                <button
+                  type="button"
+                  className="btn btn-secondary pagination-btn"
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={safePage === 1}
+                >
+                  Previous
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                  <button
+                    key={page}
+                    type="button"
+                    className={`btn ${safePage === page ? 'btn-primary' : 'btn-secondary'} pagination-btn`}
+                    onClick={() => setCurrentPage(page)}
+                  >
+                    {page}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary pagination-btn"
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={safePage === totalPages}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
+
     </div>
   );
 }

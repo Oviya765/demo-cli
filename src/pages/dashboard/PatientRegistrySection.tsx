@@ -143,10 +143,10 @@ export default function PatientRegistrySection({
       </div>
 
       {showAddPatientModal && (
-        <div className="modal-overlay" style={{ background: 'rgba(5, 8, 16, 0.85)', backdropFilter: 'blur(8px)' }}>
-          <div className="modal" style={{ maxWidth: '650px', background: '#0d1527', border: '1px solid rgba(255,255,255,0.08)', color: '#ffffff' }}>
-            <div className="modal-header" style={{ padding: '24px 24px 8px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="modal-overlay" style={{ background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(6px)' }}>
+          <div className="modal" style={{ maxWidth: '650px', background: '#ffffff', border: '1px solid #e2e8f0', color: '#0f172a', boxShadow: '0 24px 80px rgba(15, 23, 42, 0.18)' }}>
+            <div className="modal-header" style={{ padding: '24px 24px 8px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Users size={20} style={{ color: 'var(--color-primary)' }} />
                 Register New Clinic Patient
               </h2>
@@ -156,48 +156,48 @@ export default function PatientRegistrySection({
             <form onSubmit={onSubmit}>
               <div className="modal-body" style={{ padding: '24px', maxHeight: '70vh', overflowY: 'auto' }}>
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Patient Full Name *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Patient Full Name *</label>
                   <input
                     type="text"
                     placeholder="Enter patient full name"
                     value={regName}
                     onChange={e => setRegName(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Patient Email *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Patient Email *</label>
                   <input
                     type="email"
                     placeholder="patient@email.com"
                     value={regEmail}
                     onChange={e => setRegEmail(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Date of Birth *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Date of Birth *</label>
                     <input
                       type="date"
                       value={dob}
                       onChange={e => setDob(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
 
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Gender *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Gender *</label>
                     <select
                       value={gender}
                       onChange={e => setGender(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: '#0d1527', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     >
                       <option value="MALE">Male</option>
                       <option value="FEMALE">Female</option>
@@ -207,109 +207,109 @@ export default function PatientRegistrySection({
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Phone Number *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Phone Number *</label>
                   <input
                     type="tel"
                     placeholder="+91 98765 43210"
                     value={phone}
                     onChange={e => setPhone(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
-                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px', margin: '24px 0 16px' }}>Address Details</h3>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '24px 0 16px' }}>Address Details</h3>
 
                 <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Street Address *</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Street Address *</label>
                   <input
                     type="text"
                     placeholder="123 Health Ave"
                     value={street}
                     onChange={e => setStreet(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>City *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>City *</label>
                     <input
                       type="text"
                       placeholder="Chennai"
                       value={city}
                       onChange={e => setCity(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>State *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>State *</label>
                     <input
                       type="text"
                       placeholder="TN"
                       value={stateCode}
                       onChange={e => setStateCode(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Zip *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Zip *</label>
                     <input
                       type="text"
                       placeholder="600001"
                       value={zip}
                       onChange={e => setZip(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                 </div>
 
-                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px', margin: '24px 0 16px' }}>Emergency Contact</h3>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '24px 0 16px' }}>Emergency Contact</h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Contact Name *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Contact Name *</label>
                     <input
                       type="text"
                       placeholder="Jane Doe (Spouse)"
                       value={emergencyName}
                       onChange={e => setEmergencyName(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                   <div className="form-group">
-                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Contact Phone *</label>
+                    <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Contact Phone *</label>
                     <input
                       type="tel"
                       placeholder="+91 98765 00000"
                       value={emergencyPhone}
                       onChange={e => setEmergencyPhone(e.target.value)}
                       required
-                      style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                      style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                     />
                   </div>
                 </div>
 
-                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px', margin: '24px 0 16px' }}>Insurance Details (Optional)</h3>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '24px 0 16px' }}>Insurance Details (Optional)</h3>
 
                 <div className="form-group" style={{ marginBottom: '8px' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Insurance Policy ID</label>
+                  <label style={{ fontSize: '0.8rem', color: '#334155', display: 'block', marginBottom: '6px' }}>Insurance Policy ID</label>
                   <input
                     type="text"
                     placeholder="INS-104928"
                     value={insuranceId}
                     onChange={e => setInsuranceId(e.target.value)}
-                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#ffffff', outline: 'none' }}
+                    style={{ width: '100%', padding: '10px 14px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', color: '#0f172a', outline: 'none' }}
                   />
                 </div>
               </div>
 
-              <div className="modal-footer" style={{ padding: '16px 24px 24px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+              <div className="modal-footer" style={{ padding: '16px 24px 24px', borderTop: '1px solid #e2e8f0' }}>
                 <button
                   type="submit"
                   disabled={actionLoading}

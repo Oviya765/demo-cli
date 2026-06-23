@@ -1,5 +1,8 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { getResultsByOrderId } from '../../services/labService';
+import { getPatientById } from '../../services/patientService';
+import { downloadLabReport, parseRefRange as parseRefRangeUtil } from '../../utils/labReport';
 import type { LabOrderResponseDto } from '../../models/types';
 import {
   Check,
@@ -7,10 +10,11 @@ import {
   FileText,
   ArrowRight,
   Trash2,
-  AlertOctagon
+  AlertOctagon,
+  Download
 } from 'lucide-react';
 import MrnLabel from './MrnLabel';
-import React from 'react';
+import React, { useState } from 'react';
 
 // Formatting helpers
 const formatDate = (dateStr: string) => {
@@ -101,10 +105,43 @@ export default function LabOrdersTable({
   const isTechnician = user?.role === 'LAB_TECHNICIAN';
   const isClinician = user?.role === 'CLINICIAN';
   const isAdmin = user?.role === 'ADMIN';
+  const isPatient = user?.role === 'PATIENT';
+
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+
+  const handleDownload = async (order: LabOrderResponseDto) => {
+    setDownloadingId(order.labOrderId);
+    try {
+      let detailed: any[] = [];
+      try {
+        detailed = await getResultsByOrderId(order.labOrderId);
+      } catch {
+        detailed = [];
+      }
+      let patient = null;
+      try {
+        patient = await getPatientById(order.patientId);
+      } catch {
+        patient = null;
+      }
+      const results = (detailed.length ? detailed : order.results || []).map((r: any) => ({
+        testCode: r.testCode,
+        value: r.value,
+        units: r.units,
+        referenceRange: parseRefRangeUtil(r.referenceRangeJson),
+        flag: r.flag,
+        reportedAt: r.reportedAt,
+      }));
+      downloadLabReport({ order, patient, results });
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const renderActions = (order: LabOrderResponseDto) => {
     const isReported = order.status === 'RESULTS_REPORTED' || order.status === 'CRITICAL_REPORTED';
-    const canViewDetails = isReported && isClinician;
+    const canViewDetails = isReported && (isClinician || isAdmin || isPatient);
+    const canDownload = isReported && (isClinician || isAdmin || isPatient);
     
     const showCollectSample = isTechnician && order.status === 'ORDERED';
     const showAddEditResults = isTechnician && order.status === 'COLLECTED';
@@ -155,6 +192,22 @@ export default function LabOrdersTable({
           </button>
         );
       }
+
+      if (canDownload) {
+        buttons.push(
+          <button
+            key="download"
+            type="button"
+            className="btn btn-primary"
+            style={{ padding: '6px 12px', fontSize: '0.75rem', height: 'auto' }}
+            onClick={() => handleDownload(order)}
+            disabled={downloadingId === order.labOrderId}
+            title="Download lab report"
+          >
+            <Download size={14} style={{ marginRight: 4 }} /> {downloadingId === order.labOrderId ? 'Preparing...' : 'Report'}
+          </button>
+        );
+      }
       
       if (showCancelOrder && onCancelOrder) {
         buttons.push(
@@ -182,6 +235,21 @@ export default function LabOrdersTable({
             onClick={() => navigate(`/lab/${order.labOrderId}`)}
           >
             View Details
+          </button>
+        );
+      }
+
+      if (canDownload) {
+        buttons.push(
+          <button
+            key="download-enc"
+            className="btn btn-ghost"
+            style={{ padding: '4px 8px', fontSize: '0.75rem', height: 'auto', minWidth: 'auto', color: 'var(--color-primary)' }}
+            onClick={() => handleDownload(order)}
+            disabled={downloadingId === order.labOrderId}
+            title="Download lab report"
+          >
+            <Download size={12} style={{ marginRight: 4 }} /> Report
           </button>
         );
       }

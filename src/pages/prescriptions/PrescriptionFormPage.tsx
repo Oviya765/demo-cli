@@ -1,10 +1,13 @@
 import { useState, useEffect, type FormEvent } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { createPrescription, searchMedications } from '../../services/prescriptionService';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
+import { createPrescription, searchMedications, getPrescriptionById, updatePrescription } from '../../services/prescriptionService';
 import { searchPatients, getPatientById } from '../../services/patientService';
 import type { PatientResponseDto } from '../../models/types';
 import { useAuth } from '../../contexts/AuthContext';
-import { ArrowLeft, Save, User, Plus } from 'lucide-react';
+import { ArrowLeft, Save, User, Plus, Trash2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { validateMedFields, validateContextFields } from '../../utils/prescriptionValidation';
+import type { RxFieldErrors, RxFieldWarnings } from '../../utils/prescriptionValidation';
 import '../../assets/styles/prescriptions/prescription.css';
 
 interface MedicationItem {
@@ -30,10 +33,13 @@ interface PrescriptionItem {
 export default function PrescriptionFormPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { id } = useParams();
   const { user } = useAuth();
+  const isEditMode = Boolean(id);
   const navigationState = location.state as { encounterId?: number; patientId?: number } | null;
 
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(false);
 
   // Encounter & Patient
   const [encounterId, setEncounterId] = useState('');
@@ -60,24 +66,63 @@ export default function PrescriptionFormPage() {
   const [route, setRoute] = useState('Oral');
   const [notes, setNotes] = useState('');
 
+  // Validation State
+  const [fieldErrors, setFieldErrors] = useState<RxFieldErrors>({});
+  const [fieldWarnings, setFieldWarnings] = useState<RxFieldWarnings>({});
+  const [encounterError, setEncounterError] = useState('');
+
   // Auto-populate from Encounter details page
   useEffect(() => {
-    if (navigationState?.encounterId) {
-      setEncounterId(String(navigationState.encounterId));
+    if (isEditMode && id) {
+      loadPrescriptionForEdit(Number(id));
+    } else {
+      if (navigationState?.encounterId) {
+        setEncounterId(String(navigationState.encounterId));
+      }
+      if (navigationState?.patientId) {
+        const loadPatient = async () => {
+          try {
+            const p = await getPatientById(navigationState.patientId!);
+            setSelectedPatient(p);
+            setPatientMrn(p.mrn);
+          } catch (err) {
+            console.error('Failed to pre-load patient', err);
+          }
+        };
+        loadPatient();
+      }
     }
-    if (navigationState?.patientId) {
-      const loadPatient = async () => {
-        try {
-          const p = await getPatientById(navigationState.patientId!);
-          setSelectedPatient(p);
-          setPatientMrn(p.mrn);
-        } catch (err) {
-          console.error('Failed to pre-load patient', err);
-        }
-      };
-      loadPatient();
+  }, [id, navigationState]);
+
+  const loadPrescriptionForEdit = async (rxId: number) => {
+    setInitialLoading(true);
+    try {
+      const rx = await getPrescriptionById(rxId);
+      setEncounterId(String(rx.encounterId));
+      setDosage(rx.dosage);
+      setFrequency(rx.frequency);
+      setDurationDays(String(rx.durationDays));
+      setQuantity(String(rx.quantity));
+      setRepeats(String(rx.repeats));
+      setRoute(rx.route);
+      setNotes(rx.notes || '');
+
+      // Load patient
+      const p = await getPatientById(rx.patientId);
+      setSelectedPatient(p);
+      setPatientMrn(p.mrn);
+
+      // Set medication info
+      setSelectedMedication({ medId: rx.medicationId, name: rx.medicationName, code: '', formulation: '' });
+      setMedSearchQuery(rx.medicationName);
+    } catch (err) {
+      console.error('Failed to load prescription for editing', err);
+      toast.error('Failed to load prescription data.');
+      navigate('/prescriptions');
+    } finally {
+      setInitialLoading(false);
     }
-  }, [navigationState]);
+  };
 
   const handlePatientSearch = async (val: string) => {
     setPatientMrn(val);
@@ -136,19 +181,34 @@ export default function PrescriptionFormPage() {
   };
 
   const handleAddItem = () => {
-    if (!selectedMedication) {
-      alert('Please search and select a medication.');
+    const { errors, warnings, isValid } = validateMedFields({
+      medication: selectedMedication,
+      dosage,
+      durationDays,
+      quantity,
+      repeats,
+      notes,
+      frequency,
+      existingMedIds: items.map(i => i.medicationId),
+    });
+    setFieldErrors(errors);
+    setFieldWarnings(warnings);
+
+    if (!isValid) {
+      toast.error('Please fix errors before adding medication.');
       return;
     }
-    if (!dosage || !durationDays || !quantity) {
-      alert('Please fill out all required medication fields (Dosage, Duration, Quantity).');
-      return;
+
+    // Show warnings but allow add
+    const warnCount = Object.values(warnings).filter(Boolean).length;
+    if (warnCount > 0) {
+      toast(`${warnCount} warning(s) flagged — review recommended.`, { icon: '⚠️' });
     }
 
     const newItem: PrescriptionItem = {
       id: Math.random().toString(36).substring(2, 9),
-      medicationId: selectedMedication.medId,
-      medicationName: selectedMedication.name,
+      medicationId: selectedMedication!.medId,
+      medicationName: selectedMedication!.name,
       dosage,
       frequency,
       durationDays: Number(durationDays),
@@ -159,6 +219,8 @@ export default function PrescriptionFormPage() {
     };
 
     setItems([...items, newItem]);
+    setFieldErrors({});
+    setFieldWarnings({});
 
     // Reset current item fields for the next add
     setSelectedMedication(null);
@@ -178,16 +240,36 @@ export default function PrescriptionFormPage() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!selectedPatient) {
-      setPatientError('Please search and select a valid patient by MRN.');
+
+    // Validate context fields
+    const ctxErrors = validateContextFields({
+      selectedPatient: !!selectedPatient,
+      encounterId,
+      hasEncounterFromNav: !!navigationState?.encounterId,
+    });
+    if (ctxErrors.patient) setPatientError(ctxErrors.patient);
+    if (ctxErrors.encounterId) setEncounterError(ctxErrors.encounterId);
+    if (Object.keys(ctxErrors).length > 0) {
+      toast.error('Please fix patient/encounter errors before submitting.');
       return;
     }
+    setEncounterError('');
 
     let itemsToSave = [...items];
 
-    // Safe fallback: If they didn't click "Add Medication" but filled the form, let's auto-add it!
+    // Safe fallback: If they didn't click "Add Medication" but filled the form, auto-validate & add
     if (itemsToSave.length === 0) {
       if (selectedMedication && dosage && durationDays && quantity) {
+        const { errors, isValid } = validateMedFields({
+          medication: selectedMedication,
+          dosage, durationDays, quantity, repeats, notes, frequency,
+          existingMedIds: [],
+        });
+        if (!isValid) {
+          setFieldErrors(errors);
+          toast.error('Please fix medication errors before saving.');
+          return;
+        }
         itemsToSave.push({
           id: 'temp',
           medicationId: selectedMedication.medId,
@@ -201,42 +283,67 @@ export default function PrescriptionFormPage() {
           notes,
         });
       } else {
-        alert('Please add at least one medication to the prescription list.');
+        toast.error('Please add at least one medication to the prescription list.');
         return;
       }
     }
 
     setLoading(true);
     try {
-      // Loop and create each prescription
-      for (const item of itemsToSave) {
-        await createPrescription({
+      if (isEditMode && id) {
+        // Edit mode: update existing prescription
+        await updatePrescription(Number(id), {
           encounterId: Number(encounterId) || 1,
           patientId: selectedPatient.patientId,
           clinicianId: user?.userId || 2,
-          medicationId: item.medicationId,
-          dosage: item.dosage,
-          frequency: item.frequency,
-          durationDays: item.durationDays,
-          quantity: item.quantity,
-          repeats: item.repeats,
-          route: item.route,
-          notes: item.notes,
+          medicationId: itemsToSave[0].medicationId,
+          dosage: itemsToSave[0].dosage,
+          frequency: itemsToSave[0].frequency,
+          durationDays: itemsToSave[0].durationDays,
+          quantity: itemsToSave[0].quantity,
+          repeats: itemsToSave[0].repeats,
+          route: itemsToSave[0].route,
+          notes: itemsToSave[0].notes,
           status: 'DRAFT',
         });
-      }
-
-      if (navigationState?.encounterId) {
-        navigate(`/encounters/${navigationState.encounterId}`);
+        toast.success('Prescription updated successfully!');
+        navigate(`/prescriptions/${id}`);
       } else {
-        navigate('/prescriptions');
+        // Create mode: create each prescription
+        for (const item of itemsToSave) {
+          await createPrescription({
+            encounterId: Number(encounterId) || 1,
+            patientId: selectedPatient.patientId,
+            clinicianId: user?.userId || 2,
+            medicationId: item.medicationId,
+            dosage: item.dosage,
+            frequency: item.frequency,
+            durationDays: item.durationDays,
+            quantity: item.quantity,
+            repeats: item.repeats,
+            route: item.route,
+            notes: item.notes,
+            status: 'DRAFT',
+          });
+        }
+        toast.success('Prescription(s) created successfully!');
+        if (navigationState?.encounterId) {
+          navigate(`/encounters/${navigationState.encounterId}`);
+        } else {
+          navigate('/prescriptions');
+        }
       }
     } catch (err) {
-      console.error('Failed to create prescription(s)', err);
+      console.error('Failed to save prescription(s)', err);
+      toast.error(isEditMode ? 'Failed to update prescription.' : 'Failed to create prescription.');
     } finally {
       setLoading(false);
     }
   };
+
+  if (initialLoading) {
+    return <div className="page-spinner"><div className="spinner"></div></div>;
+  }
 
   return (
     <div>
@@ -245,7 +352,9 @@ export default function PrescriptionFormPage() {
           <button
             className="btn btn-ghost btn-icon"
             onClick={() => {
-              if (navigationState?.encounterId) {
+              if (isEditMode) {
+                navigate(`/prescriptions/${id}`);
+              } else if (navigationState?.encounterId) {
                 navigate(`/encounters/${navigationState.encounterId}`);
               } else {
                 navigate('/prescriptions');
@@ -255,8 +364,10 @@ export default function PrescriptionFormPage() {
             <ArrowLeft size={20} />
           </button>
           <div>
-            <h1>New Prescription</h1>
-            {navigationState?.encounterId ? (
+            <h1>{isEditMode ? 'Edit Prescription' : 'New Prescription'}</h1>
+            {isEditMode ? (
+              <p>Update prescription #{id}</p>
+            ) : navigationState?.encounterId ? (
               <p>Adding prescription for Encounter #{navigationState.encounterId}</p>
             ) : (
               <p>Write a new prescription for a patient</p>
@@ -329,9 +440,11 @@ export default function PrescriptionFormPage() {
                     type="number"
                     placeholder="Enter encounter ID"
                     value={encounterId}
-                    onChange={e => setEncounterId(e.target.value)}
+                    onChange={e => { setEncounterId(e.target.value); setEncounterError(''); }}
                     required
+                    style={{ borderColor: encounterError ? 'var(--color-danger)' : undefined }}
                   />
+                  {encounterError && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{encounterError}</div>}
                 </div>
               ) : (
                 <div className="form-group">
@@ -404,17 +517,21 @@ export default function PrescriptionFormPage() {
                     <span className="badge badge-success">Selected</span> <strong style={{ color: 'var(--color-text)' }}>{selectedMedication.name}</strong> ({selectedMedication.code})
                   </div>
                 )}
+                {fieldErrors.medication && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{fieldErrors.medication}</div>}
               </div>
 
               <div className="form-group">
                 <label className="form-label">Dosage <span className="required">*</span></label>
                 <input
                   className="form-input"
-                  placeholder="e.g. 1 tablet, 5ml"
+                  placeholder="e.g. 500mg, 1 tablet, 5ml"
                   value={dosage}
-                  onChange={e => setDosage(e.target.value)}
+                  onChange={e => { setDosage(e.target.value); if (fieldErrors.dosage) setFieldErrors(prev => ({ ...prev, dosage: undefined })); }}
                   required={items.length === 0}
+                  style={{ borderColor: fieldErrors.dosage ? 'var(--color-danger)' : undefined }}
+                  maxLength={50}
                 />
+                {fieldErrors.dosage && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{fieldErrors.dosage}</div>}
               </div>
             </div>
 
@@ -457,11 +574,15 @@ export default function PrescriptionFormPage() {
                   className="form-input"
                   type="number"
                   min={1}
+                  max={365}
                   placeholder="e.g. 7"
                   value={durationDays}
-                  onChange={e => setDurationDays(e.target.value)}
+                  onChange={e => { setDurationDays(e.target.value); if (fieldErrors.durationDays) setFieldErrors(prev => ({ ...prev, durationDays: undefined })); }}
                   required={items.length === 0}
+                  style={{ borderColor: fieldErrors.durationDays ? 'var(--color-danger)' : undefined }}
                 />
+                {fieldErrors.durationDays && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{fieldErrors.durationDays}</div>}
+                {!fieldErrors.durationDays && fieldWarnings.durationDays && <div style={{ color: '#f59e0b', fontSize: '0.75rem', marginTop: '4px' }}>⚠ {fieldWarnings.durationDays}</div>}
               </div>
             </div>
 
@@ -472,11 +593,15 @@ export default function PrescriptionFormPage() {
                   className="form-input"
                   type="number"
                   min={1}
+                  max={9999}
                   placeholder="Total units to dispense"
                   value={quantity}
-                  onChange={e => setQuantity(e.target.value)}
+                  onChange={e => { setQuantity(e.target.value); if (fieldErrors.quantity) setFieldErrors(prev => ({ ...prev, quantity: undefined })); }}
                   required={items.length === 0}
+                  style={{ borderColor: fieldErrors.quantity ? 'var(--color-danger)' : undefined }}
                 />
+                {fieldErrors.quantity && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{fieldErrors.quantity}</div>}
+                {!fieldErrors.quantity && fieldWarnings.quantity && <div style={{ color: '#f59e0b', fontSize: '0.75rem', marginTop: '4px' }}>⚠ {fieldWarnings.quantity}</div>}
               </div>
 
               <div className="form-group">
@@ -485,10 +610,14 @@ export default function PrescriptionFormPage() {
                   className="form-input"
                   type="number"
                   min={0}
+                  max={12}
                   placeholder="0"
                   value={repeats}
-                  onChange={e => setRepeats(e.target.value)}
+                  onChange={e => { setRepeats(e.target.value); if (fieldErrors.repeats) setFieldErrors(prev => ({ ...prev, repeats: undefined })); }}
+                  style={{ borderColor: fieldErrors.repeats ? 'var(--color-danger)' : undefined }}
                 />
+                {fieldErrors.repeats && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{fieldErrors.repeats}</div>}
+                {!fieldErrors.repeats && fieldWarnings.repeats && <div style={{ color: '#f59e0b', fontSize: '0.75rem', marginTop: '4px' }}>⚠ {fieldWarnings.repeats}</div>}
               </div>
 
               <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
@@ -505,14 +634,17 @@ export default function PrescriptionFormPage() {
 
             {/* Notes */}
             <div className="form-group" style={{ marginTop: '16px' }}>
-              <label className="form-label">Notes / Instructions</label>
+              <label className="form-label">Notes / Instructions <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontWeight: 400 }}>({notes.length}/500)</span></label>
               <textarea
                 className="form-textarea"
                 placeholder="Special warnings, patient advice..."
                 value={notes}
-                onChange={e => setNotes(e.target.value)}
+                onChange={e => { setNotes(e.target.value); if (fieldErrors.notes) setFieldErrors(prev => ({ ...prev, notes: undefined })); }}
                 rows={2}
+                maxLength={500}
+                style={{ borderColor: fieldErrors.notes ? 'var(--color-danger)' : undefined }}
               />
+              {fieldErrors.notes && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>{fieldErrors.notes}</div>}
             </div>
           </div>
         </div>
@@ -557,10 +689,11 @@ export default function PrescriptionFormPage() {
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
-                            style={{ color: 'var(--color-danger)', padding: '4px 8px' }}
+                            style={{ color: 'var(--color-danger)', padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                             onClick={() => handleRemoveItem(item.id)}
+                            title="Remove medication"
                           >
-                            Remove
+                            <Trash2 size={14} /> Remove
                           </button>
                         </td>
                       </tr>
@@ -578,7 +711,9 @@ export default function PrescriptionFormPage() {
             type="button"
             className="btn btn-secondary"
             onClick={() => {
-              if (navigationState?.encounterId) {
+              if (isEditMode) {
+                navigate(`/prescriptions/${id}`);
+              } else if (navigationState?.encounterId) {
                 navigate(`/encounters/${navigationState.encounterId}`);
               } else {
                 navigate('/prescriptions');
@@ -589,7 +724,7 @@ export default function PrescriptionFormPage() {
           </button>
           <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>
             <Save size={18} />
-            {loading ? 'Saving...' : items.length > 0 ? `Save ${items.length} Prescription(s)` : 'Save Prescription'}
+            {loading ? 'Saving...' : isEditMode ? 'Update Prescription' : items.length > 0 ? `Save ${items.length} Prescription(s)` : 'Save Prescription'}
           </button>
         </div>
       </form>

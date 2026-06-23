@@ -1,16 +1,24 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getAllPrescriptions } from '../../services/prescriptionService';
+import { getAllPrescriptions, getPrescriptionsByPatientId } from '../../services/prescriptionService';
+import { getMyProfile } from '../../services/patientService';
 import type { PrescriptionResponseDto } from '../../models/types';
-import { Search, Pill } from 'lucide-react';
-import { getPatientMrnSync } from '../../services/patientService';
+import { Search, Pill, Eye } from 'lucide-react';
+import { fetchMrnByPatientId } from '../../services/patientService';
+import { useAuth } from '../../contexts/AuthContext';
+import { Pagination } from '../../components/ui/components';
 import '../../assets/styles/prescriptions/prescription.css';
 
 export default function PrescriptionListPage() {
+  const { user } = useAuth();
   const [prescriptions, setPrescriptions] = useState<PrescriptionResponseDto[]>([]);
+  const [mrnMap, setMrnMap] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [showMineOnly, setShowMineOnly] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -19,13 +27,28 @@ export default function PrescriptionListPage() {
 
   const loadPrescriptions = async () => {
     try {
-      const data = await getAllPrescriptions();
+      let data: PrescriptionResponseDto[];
+      if (user?.role === 'PATIENT') {
+        const profile = await getMyProfile();
+        data = profile ? await getPrescriptionsByPatientId(profile.patientId) : [];
+      } else {
+        data = await getAllPrescriptions();
+      }
       setPrescriptions(data);
+      loadMrns(data);
     } catch (err) {
       console.error('Failed to load prescriptions', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadMrns = async (data: PrescriptionResponseDto[]) => {
+    const uniqueIds = Array.from(new Set(data.map(rx => rx.patientId)));
+    const entries = await Promise.all(
+      uniqueIds.map(async (pid) => [pid, await fetchMrnByPatientId(pid)] as const)
+    );
+    setMrnMap(Object.fromEntries(entries));
   };
 
   const filtered = prescriptions.filter(rx => {
@@ -34,8 +57,15 @@ export default function PrescriptionListPage() {
       rx.medicationName.toLowerCase().includes(search.toLowerCase()) ||
       rx.clinicianName.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === 'ALL' || rx.status === statusFilter;
-    return matchSearch && matchStatus;
+    const matchMine = !showMineOnly || rx.clinicianId === user?.userId;
+    return matchSearch && matchStatus && matchMine;
   });
+
+  // Reset to page 1 when filters change
+  useEffect(() => { setCurrentPage(1); }, [search, statusFilter, showMineOnly]);
+
+  const totalPages = Math.ceil(filtered.length / itemsPerPage);
+  const paginatedData = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const getStatusBadge = (status: string) => {
     const map: Record<string, { cls: string; label: string }> = {
@@ -81,12 +111,21 @@ export default function PrescriptionListPage() {
         {['ALL', 'DRAFT', 'ISSUED', 'DISPENSED', 'CANCELLED'].map(status => (
           <button
             key={status}
-            className={`filter-chip ${statusFilter === status ? 'active' : ''}`}
-            onClick={() => setStatusFilter(status)}
+            className={`filter-chip ${statusFilter === status && !showMineOnly ? 'active' : ''}`}
+            onClick={() => { setStatusFilter(status); setShowMineOnly(false); }}
           >
             {status === 'ALL' ? 'All' : status.charAt(0) + status.slice(1).toLowerCase()}
           </button>
         ))}
+        {user?.role === 'CLINICIAN' && (
+          <button
+            className={`filter-chip ${showMineOnly ? 'active' : ''}`}
+            onClick={() => { setShowMineOnly(true); setStatusFilter('ALL'); }}
+            style={{ marginLeft: '8px' }}
+          >
+            My Prescriptions
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -97,47 +136,56 @@ export default function PrescriptionListPage() {
           <p>Try adjusting your search.</p>
         </div>
       ) : (
+        <>
         <div className="data-table-wrapper">
           <table className="data-table">
             <thead>
               <tr>
                 <th>Patient</th>
                 <th>Medication</th>
-                <th>Dosage</th>
-                <th>Frequency</th>
-                <th>Duration</th>
-                <th>Route</th>
                 <th>Prescriber</th>
                 <th>Issued</th>
                 <th>Status</th>
+                <th style={{ textAlign: 'center' }}>Action</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(rx => (
+              {paginatedData.map(rx => (
                 <tr key={rx.rxId} className="clickable-row" onClick={() => navigate(`/prescriptions/${rx.rxId}`)}>
                   <td>
                     <div className="cell-main">{rx.patientName}</div>
-                    <div className="cell-sub">MRN: {getPatientMrnSync(rx.patientId)}</div>
+                    <div className="cell-sub">MRN: {mrnMap[rx.patientId] ?? '…'}</div>
                   </td>
                   <td>
                     <div className="cell-main">{rx.medicationName}</div>
                   </td>
-                  <td>{rx.dosage}</td>
-                  <td style={{ maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {rx.frequency}
-                  </td>
-                  <td>{rx.durationDays} days</td>
-                  <td>
-                    <span className="badge badge-neutral">{rx.route}</span>
-                  </td>
                   <td>{rx.clinicianName}</td>
                   <td>{formatDate(rx.issuedAt)}</td>
                   <td>{getStatusBadge(rx.status)}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button
+                      className="btn btn-ghost btn-icon"
+                      style={{ padding: '4px', minWidth: 'auto', height: 'auto', color: 'var(--color-primary)' }}
+                      onClick={(e) => { e.stopPropagation(); navigate(`/prescriptions/${rx.rxId}`); }}
+                      title="View details"
+                    >
+                      <Eye size={16} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filtered.length}
+          itemsPerPage={itemsPerPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(val) => { setItemsPerPage(val); setCurrentPage(1); }}
+        />
+        </>
       )}
     </div>
   );

@@ -174,7 +174,7 @@ export default function LabOrderFormPage() {
 
       await createLabOrder(payload);
       toast.success('Lab order placed successfully!');
-      navigate('/lab');
+      navigate(stateEncounterId ? `/encounters/${stateEncounterId}` : '/lab');
     } catch (err: any) {
       toast.error(err.message || 'Failed to place lab order');
     } finally {
@@ -187,7 +187,7 @@ export default function LabOrderFormPage() {
       {/* Page Header */}
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button type="button" className="btn btn-ghost btn-icon" onClick={() => navigate('/lab')}>
+          <button type="button" className="btn btn-ghost btn-icon" onClick={() => navigate(stateEncounterId ? `/encounters/${stateEncounterId}` : '/lab')}>
             <ArrowLeft size={20} />
           </button>
           <div>
@@ -418,7 +418,7 @@ export default function LabOrderFormPage() {
 
         {/* Action Controls */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '32px' }}>
-          <button type="button" className="btn btn-secondary" onClick={() => navigate('/lab')}>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate(stateEncounterId ? `/encounters/${stateEncounterId}` : '/lab')}>
             Cancel
           </button>
           <button type="submit" className="btn btn-primary btn-lg" disabled={loading || !selectedPatient || !encounterId || selectedTests.length === 0}>

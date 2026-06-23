@@ -1,5 +1,6 @@
 import api from './api';
 import type { AppointmentResponseDto, AppointmentRequestDto, UserResponseDto } from '../models/types';
+import { parseApiError } from '../utils/validation';
 
 export interface Clinician {
   userId: number;
@@ -8,17 +9,19 @@ export interface Clinician {
 }
 
 function getApiErrorMessage(err: any, fallback: string): string {
-  const data = err?.response?.data;
-  if (typeof data === 'string' && data.trim()) {
-    return data;
+  const parsed = parseApiError(err, fallback);
+  
+  // Check if both startAt and endAt have date validation errors and combine into single message
+  const fieldErrors = err?.response?.data?.fieldErrors;
+  if (fieldErrors && typeof fieldErrors === 'object') {
+    const hasStartAtError = fieldErrors.startAt?.some((msg: string) => msg.includes('This appointment time window is in the past. Please select a future time window.'));
+    const hasEndAtError = fieldErrors.endAt?.some((msg: string) => msg.includes('must be a date in the present or in the futureThis appointment time window is in the past. Please select a future time window.'));
+    if (hasStartAtError && hasEndAtError) {
+      return 'This appointment time window is in the past. Please select a future time window.';
+    }
   }
-  if (typeof data?.message === 'string' && data.message.trim()) {
-    return data.message;
-  }
-  if (typeof err?.message === 'string' && err.message.trim()) {
-    return err.message;
-  }
-  return fallback;
+  
+  return parsed;
 }
 
 export async function getAllAppointments(): Promise<AppointmentResponseDto[]> {
@@ -72,6 +75,34 @@ export async function cancelAppointment(apptId: number): Promise<AppointmentResp
     return response.data;
   } catch (err: any) {
     throw new Error(getApiErrorMessage(err, 'Failed to cancel appointment'));
+  }
+}
+
+/**
+ * Marks an appointment as NO_SHOW (patient did not arrive).
+ */
+export async function markNoShow(apptId: number): Promise<AppointmentResponseDto> {
+  try {
+    const response = await api.patch<AppointmentResponseDto>(`/api/v1/appointments/${apptId}/no-show`);
+    return response.data;
+  } catch (err: any) {
+    throw new Error(getApiErrorMessage(err, 'Failed to mark appointment as no-show'));
+  }
+}
+
+/**
+ * Reschedules an appointment to a new time window.
+ */
+export async function rescheduleAppointment(apptId: number, startAt: string, endAt: string): Promise<AppointmentResponseDto> {
+  try {
+    const response = await api.patch<AppointmentResponseDto>(
+      `/api/v1/appointments/${apptId}/reschedule`,
+      null,
+      { params: { startAt, endAt } }
+    );
+    return response.data;
+  } catch (err: any) {
+    throw new Error(getApiErrorMessage(err, 'Failed to reschedule appointment'));
   }
 }
 

@@ -3,19 +3,12 @@ import type { EncounterResponseDto, EncounterRequestDto } from '../models/types'
 const BASE_URL = 'http://localhost:8081';
 
 function getAuthHeaders(): Record<string, string> {
-  try {
-    const stored = localStorage.getItem('clinic_flow_user');
-    if (stored) {
-      const authUser = JSON.parse(stored);
-      if (authUser?.token) {
-        return {
-          'Authorization': `Bearer ${authUser.token}`,
-          'Content-Type': 'application/json'
-        };
-      }
-    }
-  } catch (err) {
-    console.error('Error reading auth token', err);
+  const token = localStorage.getItem('clinic_flow_token');
+  if (token) {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
   }
   return {
     'Content-Type': 'application/json'
